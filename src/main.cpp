@@ -51,7 +51,7 @@ struct BMWModule
 BMWModule modules[MAX_MODULES];
 bool balancingActive = false;
 bool manualMode = false;
-bool passiveMode = true; // Start in passive listening mode
+bool passiveMode = false; // Start in auto mode - balance when needed
 bool externalMasterDetected = false;
 float targetBalanceVoltage = 4.0f;
 uint8_t messageCounter = 0;
@@ -158,11 +158,9 @@ void parseModuleMessage(const twai_message_t &msg)
 {
   uint32_t id = msg.identifier;
 
-  // Detect if external master (BMS/SME) is sending balancing commands
+  // Ignore control messages from other masters (0x080-0x08F)
   if ((id & 0x0F0) == 0x080)
   {
-    externalMasterDetected = true;
-    lastExternalCommandTime = millis();
     return; // Don't parse control messages, only data messages
   }
 
@@ -345,56 +343,12 @@ void sendBalancingCommand()
   msg.data[6] = messageCounter << 4;
   msg.data[7] = calculateChecksum(msg, nextMessage);
 
-  // Check if external master is active (BMS/SME sending commands)
-  if (millis() - lastExternalCommandTime < 5000)
-  {
-    // External master detected within last 5 seconds
-    if (!passiveMode)
-    {
-      Serial.println("External master detected - entering passive mode");
-      passiveMode = true;
-      balancingActive = false;
-    }
-    return;
-  }
-  else
-  {
-    // No external master for 5+ seconds, we can take control
-    if (passiveMode && !manualMode)
-    {
-      Serial.println("External master inactive - ready for control");
-      passiveMode = false;
-    }
-  }
-
-  float lowestVoltage = getLowestCellVoltage();
-  float highestVoltage = getHighestCellVoltage();
-  float difference_mV = (highestVoltage - lowestVoltage) * 1000.0f;
-
-  if (!balancingActive && difference_mV > BALANCE_THRESHOLD_MV)
-  {
-    // Start balancing
-    balancingActive = true;
-    targetBalanceVoltage = lowestVoltage;
-    Serial.printf("✓ Starting balancing: Lowest=%.3fV, Highest=%.3fV, Diff=%.1fmV\n",
-                  lowestVoltage, highestVoltage, difference_mV);
-  }
-  else if (balancingActive && difference_mV < BALANCE_HYSTERESIS_MV)
-  {
-    // Stop balancing
-    balancingActive = false;
-    Serial.printf("✓ Stopping balancing: Cells balanced within %.1fmV\n", difference_mV);
-  }
-
-  // Update target voltage during balancing
-  if (balancingActive)
-  {
-    targetBalanceVoltage = lowestVoltage;
-  }
-
-  // Only send if balancing is active AND we're not in passive mode
+  // Only send if balancing is active AND not in passive mode
   if (!balancingActive || passiveMode)
     return;
+
+  // Update target voltage during balancing
+  targetBalanceVoltage = getLowestCellVoltage();
 
   // Send CAN message
   twai_transmit(&msg, pdMS_TO_TICKS(10));
@@ -407,30 +361,30 @@ void sendBalancingCommand()
 // Update balancing logic
 void updateBalancing()
 {
-  // Check if external master is active (BMS/SME sending commands)
-  if (millis() - lastExternalCommandTime < 5000)
+  // Detect external master by checking if modules are sending frequent updates
+  // This is only for display purposes - we still balance even if external master is active
+  bool externalMasterActive = false;
+  for (int m = 0; m < MAX_MODULES; m++)
   {
-    // External master detected within last 5 seconds
-    if (!passiveMode)
+    if (modules[m].exists && (millis() - modules[m].lastUpdate < 2000))
     {
-      Serial.println("External master detected - entering passive mode");
-      passiveMode = true;
-      balancingActive = false;
-    }
-    return;
-  }
-  else
-  {
-    // No external master for 5+ seconds, we can take control
-    if (passiveMode && !manualMode)
-    {
-      Serial.println("External master inactive - ready for control");
-      passiveMode = false;
+      externalMasterActive = true;
+      break;
     }
   }
 
-  // Don't do auto-balancing in manual mode
-  if (manualMode)
+  if (externalMasterActive)
+  {
+    externalMasterDetected = true;
+    lastExternalCommandTime = millis();
+  }
+  else if (millis() - lastExternalCommandTime > 5000)
+  {
+    externalMasterDetected = false;
+  }
+
+  // Don't do auto-balancing in manual mode or passive mode
+  if (manualMode || passiveMode)
     return;
 
   float lowestVoltage = getLowestCellVoltage();
