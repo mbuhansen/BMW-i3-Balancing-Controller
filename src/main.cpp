@@ -20,8 +20,8 @@
 #define LED_PIN GPIO_NUM_4  // WS2812 RGB LED
 
 // WiFi Configuration - ENTER YOUR OWN WIFI HERE
-const char* WIFI_SSID = "SSID";      // Change to your WiFi name
-const char* WIFI_PASSWORD = "PASSWORD"; // Change to your WiFi password
+const char* WIFI_SSID = "YourWiFiName";      // Change to your WiFi name
+const char* WIFI_PASSWORD = "YourWiFiPassword"; // Change to your WiFi password
 
 // Configuration
 #define MAX_MODULES 8
