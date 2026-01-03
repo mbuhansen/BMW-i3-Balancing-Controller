@@ -1,0 +1,24 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "PlatformIO: Build BMW-i3-Balancing-Controller",
+			"type": "shell",
+			"command": "platformio run",
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "PlatformIO: Install MCP_CAN library",
+			"type": "shell",
+			"command": "platformio lib install 212",
+			"group": "build"
+		},
+		{
+			"label": "PlatformIO: Build BMW-i3-Balancing-Controller",
+			"type": "shell",
+			"command": "platformio run",
+			"group": "build"
+		}
+	]
+}
