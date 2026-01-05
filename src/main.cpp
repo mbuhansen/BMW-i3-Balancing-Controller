@@ -92,11 +92,8 @@ uint32_t lastCommandTime = 0;
 uint32_t lastExternalCommandTime = 0;
 uint32_t lastDataUpdate = 0;
 
-// Dual-core task handle - NO MUTEX (float reads are atomic enough on ESP32)
-TaskHandle_t canGatewayTaskHandle = NULL;
-
-// Queue for requesting broadcast from Core 0 to Core 1 (to avoid cross-core mutex in AsyncTCP)
-QueueHandle_t broadcastQueue = NULL;
+// Single-core mode - all tasks run on Core 1 (WiFi core)
+// No mutex needed - everything runs on same core
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
@@ -284,10 +281,11 @@ void parseModuleMessage(const twai_message_t &msg)
   // 0x13X = cells 3-5 (type 3)
   // 0x14X = cells 6-8 (type 4)
   // 0x15X = cells 9-11 (type 5)
-  // 0x17X = temperatures (ignored for now)
+  // 0x16X = balance status (type 6)
+  // 0x17X = temperatures (type 7)
   uint8_t typeId = messageType;
 
-  if (typeId > 5 && typeId != 7)
+  if (typeId > 7)
   {
     return;
   }
@@ -345,6 +343,16 @@ void parseModuleMessage(const twai_message_t &msg)
     // Balancing status (0x16X)
     // Byte 2-5 contain balancing data: non-zero means balancing is active
     module.balancing = (msg.data[2] != 0 || msg.data[3] != 0 || msg.data[4] != 0 || msg.data[5] != 0);
+    break;
+
+  case 7:
+    // Temperatures (0x17X)
+    // BMW i3 uses offset of -40°C (common automotive standard)
+    // 4 temperature sensors per module
+    module.temperatures[0] = (float)msg.data[0] - 40.0f;
+    module.temperatures[1] = (float)msg.data[1] - 40.0f;
+    module.temperatures[2] = (float)msg.data[2] - 40.0f;
+    module.temperatures[3] = (float)msg.data[3] - 40.0f;
     break;
   }
 
@@ -533,32 +541,12 @@ void sendBalancingCommand()
   msg.data[0] = targetVoltage_mV & 0xFF;
   msg.data[1] = (targetVoltage_mV >> 8) & 0xFF;
 
-  // Cycle through different request types like BMW BMS does
-  // This ensures modules send back voltage, temperature, and balance status
-  static uint8_t requestCycle = 0;
-
-  // Build request pattern - CRITICAL: This requests cell voltages from modules
-  if (requestCycle == 0)
-  {
-    msg.data[2] = 0xFF;
-    msg.data[3] = 0x5F; // Request voltage + temp + balance status
-    msg.data[4] = 0x08; // Enable balancing
-  }
-  else if (requestCycle == 1)
-  {
-    msg.data[2] = 0xFF;
-    msg.data[3] = 0x0F; // Request basic data
-    msg.data[4] = 0x08; // Enable balancing
-  }
-  else
-  {
-    msg.data[2] = 0xFF;
-    msg.data[3] = 0x5F; // Request voltage + temp + balance status
-    msg.data[4] = 0x08; // Enable balancing
-  }
-
-  requestCycle = (requestCycle + 1) % 3;
-
+  // Request pattern matching actual BMW BMS behavior (from logs)
+  // Byte 2-3: Always 0xFF 0x5F (request voltage + temp + balance status)
+  // Byte 4: 0x08 to enable balancing
+  msg.data[2] = 0xFF;
+  msg.data[3] = 0x5F; // Request voltage + temp + balance status
+  msg.data[4] = 0x08; // Enable balancing
   msg.data[5] = 0x00;
   msg.data[6] = messageCounter << 4;
   msg.data[7] = calculateChecksum(msg, nextMessage);
@@ -787,24 +775,7 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
   }
 }
 
-// Send data to WebSocket clients - REQUEST from Core 0
-void broadcastData()
-{
-  static uint32_t lastBroadcast = 0;
-  if (millis() - lastBroadcast < 15000)
-    return; // Broadcast every 15000ms (15 seconds)
-  lastBroadcast = millis();
-
-  // Simply send a trigger to Core 1 to do the actual broadcast
-  // This avoids calling ws.textAll() from Core 0 which causes mutex issues
-  uint8_t trigger = 1;
-  if (broadcastQueue != NULL)
-  {
-    xQueueSend(broadcastQueue, &trigger, 0); // Don't block
-  }
-}
-
-// Actually send data to WebSocket clients - CALLED from Core 1 only
+// Send data to WebSocket clients
 void performBroadcast()
 {
   JsonDocument doc;
@@ -899,6 +870,12 @@ void performBroadcast()
       {
         cellsArray.add(modules[m].cellVoltages[c]);
       }
+    }
+
+    JsonArray tempsArray = moduleObj["temps"].to<JsonArray>();
+    for (int t = 0; t < 4; t++)
+    {
+      tempsArray.add(modules[m].temperatures[t]);
     }
   }
 
@@ -1101,6 +1078,40 @@ const char index_html[] PROGMEM = R"rawliteral(
             color: #60a5fa;
             text-shadow: 0 0 10px rgba(96, 165, 250, 0.5);
         }
+        .module-temps {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 5px;
+            font-size: 0.85em;
+        }
+        .temp-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 8px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 5px;
+        }
+        .temp-label {
+            opacity: 0.7;
+        }
+        .temp-value {
+            font-weight: bold;
+        }
+        .temp-value.cold {
+            color: #60a5fa;
+        }
+        .temp-value.normal {
+            color: #4ade80;
+        }
+        .temp-value.warm {
+            color: #fbbf24;
+        }
+        .temp-value.hot {
+            color: #ef4444;
+        }
         .top-right-buttons {
             position: fixed;
             top: 20px;
@@ -1156,7 +1167,6 @@ const char index_html[] PROGMEM = R"rawliteral(
             border-radius: 10px;
             padding: 10px;
             gap: 2px;
-            overflow-x: auto;
         }
         .cell-bar {
             flex: 1;
@@ -1414,8 +1424,48 @@ const char index_html[] PROGMEM = R"rawliteral(
                     cellsDiv.appendChild(cellDiv);
                 });
                 
-                moduleDiv.appendChild(headerDiv);
-                moduleDiv.appendChild(cellsDiv);
+                // Add temperatures if available
+                if (module.temps && module.temps.length > 0) {
+                    const tempsDiv = document.createElement('div');
+                    tempsDiv.className = 'module-temps';
+                    
+                    module.temps.forEach((temp, index) => {
+                        const tempItem = document.createElement('div');
+                        tempItem.className = 'temp-item';
+                        
+                        const tempLabel = document.createElement('span');
+                        tempLabel.className = 'temp-label';
+                        tempLabel.textContent = 'Temp ' + (index + 1) + ':';
+                        
+                        const tempValue = document.createElement('span');
+                        tempValue.className = 'temp-value';
+                        
+                        // Color code temperature
+                        if (temp < 10) {
+                            tempValue.className += ' cold';
+                        } else if (temp < 30) {
+                            tempValue.className += ' normal';
+                        } else if (temp < 45) {
+                            tempValue.className += ' warm';
+                        } else {
+                            tempValue.className += ' hot';
+                        }
+                        
+                        tempValue.textContent = temp.toFixed(1) + '°C';
+                        
+                        tempItem.appendChild(tempLabel);
+                        tempItem.appendChild(tempValue);
+                        tempsDiv.appendChild(tempItem);
+                    });
+                    
+                    moduleDiv.appendChild(headerDiv);
+                    moduleDiv.appendChild(cellsDiv);
+                    moduleDiv.appendChild(tempsDiv);
+                } else {
+                    moduleDiv.appendChild(headerDiv);
+                    moduleDiv.appendChild(cellsDiv);
+                }
+                
                 modulesContainer.appendChild(moduleDiv);
             });
             
@@ -1734,13 +1784,6 @@ void setup()
   server.begin();
   Serial.println("Web server started");
 
-  // Create broadcast queue for Core 0 -> Core 1 communication (avoid cross-core mutex)
-  broadcastQueue = xQueueCreate(5, sizeof(uint8_t));
-  if (broadcastQueue == NULL)
-  {
-    Serial.println("⚠ Failed to create broadcast queue");
-  }
-
   Serial.println("\n✓ Setup complete!");
   Serial.println("\nGateway Architecture:");
   Serial.println("  MCP2515 (BMS) <-> ESP32 <-> TWAI (Slave Modules)");
@@ -1752,45 +1795,13 @@ void setup()
     Serial.printf("Access the interface at: http://%s\n\n", WiFi.localIP().toString().c_str());
   }
 
-  // Create Gateway Controller task on Core 0 (WiFi/WebSocket runs on Core 1)
-  xTaskCreatePinnedToCore(
-      canGatewayTask,        // Task function
-      "Gateway_Controller",  // Task name
-      8192,                  // Stack size (8KB)
-      NULL,                  // Parameters
-      1,                     // Priority (1 to avoid conflicts with WiFi tasks)
-      &canGatewayTaskHandle, // Task handle
-      0                      // Core 0 (Core 1 is used for WiFi/WebSocket)
-  );
-
-  Serial.println("\n✓ Gateway Controller task started on Core 0");
-  Serial.println("✓ Web UI running on Core 1\n");
-}
-
-// Gateway Controller Task - Runs on Core 0
-void canGatewayTask(void *parameter)
-{
-  Serial.println("[Core 0] Gateway Controller task running...");
-
-  while (true)
-  {
-    // Read module data from TWAI
-    readCANMessages();
-
-    // Send data requests and balancing commands
-    sendBalancingCommand();
-
-    // Update balancing logic (auto mode)
-    updateBalancing();
-
-    // Small yield to prevent watchdog timeout and reduce mutex contention
-    vTaskDelay(5); // 5ms delay (FreeRTOS) - gives more breathing room
-  }
+  Serial.println("\n✓ Single-core mode - all tasks on Core 1\n");
 }
 
 void loop()
 {
-  // Core 1: Handle Web UI, WiFi, and OTA (no CAN processing here)
+  // Single-core mode: All tasks run on Core 1 (WiFi core)
+  // No mutex issues - everything runs sequentially
 
   // Handle OTA updates
   ArduinoOTA.handle();
@@ -1801,33 +1812,39 @@ void loop()
   // Update LED status
   updateLED();
 
-  // Check if Core 0 requested a broadcast (via queue to avoid cross-core mutex)
-  uint8_t trigger;
-  if (broadcastQueue != NULL && xQueueReceive(broadcastQueue, &trigger, 0) == pdTRUE)
+  // CAN processing
+  readCANMessages();
+  sendBalancingCommand();
+  updateBalancing();
+
+  // Broadcast data to WebSocket clients
+  static uint32_t lastBroadcast = 0;
+  if (millis() - lastBroadcast > 15000) // Every 15 seconds
   {
-    performBroadcast(); // Actually send data from Core 1 only
+    lastBroadcast = millis();
+    performBroadcast();
   }
 
-  // Request broadcast from Core 0 (if needed)
-  broadcastData();
-
-  // Print status every 10 seconds
+  // Print status every 30 seconds (reduced to prevent Serial mutex conflict with WebSocket)
   static uint32_t lastStatusPrint = 0;
-  if (millis() - lastStatusPrint > 10000)
+  if (millis() - lastStatusPrint > 30000)
   {
     lastStatusPrint = millis();
 
-    // Cache voltage values to avoid multiple mutex acquisitions
-    float lowestV = getLowestCellVoltage();
-    float highestV = getHighestCellVoltage();
+    // Only print if no WebSocket clients connected (to avoid mutex deadlock)
+    if (ws.count() == 0)
+    {
+      float lowestV = getLowestCellVoltage();
+      float highestV = getHighestCellVoltage();
 
-    Serial.printf("Status: %s | Mode: %s | Cells: %.3fV-%.3fV (Δ%.1fmV)\n",
-                  balancingActive ? "BALANCING" : "GATEWAY",
-                  manualMode ? "MANUAL" : "AUTO",
-                  lowestV, highestV,
-                  (highestV - lowestV) * 1000.0f);
+      Serial.printf("Status: %s | Mode: %s | Cells: %.3fV-%.3fV (Δ%.1fmV)\n",
+                    balancingActive ? "BALANCING" : "GATEWAY",
+                    manualMode ? "MANUAL" : "AUTO",
+                    lowestV, highestV,
+                    (highestV - lowestV) * 1000.0f);
+    }
   }
 
-  // Small delay to reduce mutex contention with Core 0
-  delay(5); // 5ms delay - balance between responsiveness and CPU usage
+  // Small delay for task switching
+  delay(1); // 1ms delay
 }
