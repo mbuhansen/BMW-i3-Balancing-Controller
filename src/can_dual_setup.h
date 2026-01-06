@@ -4,18 +4,53 @@
 #include <mcp_can.h>
 #include <SPI.h>
 
-// Custom SPI pins (matching battery emulator wiring)
-#define SPI_SCK 12
-#define SPI_MISO 34
-#define SPI_MOSI 5
-
-// MCP2515 #1 (CAN2)
-#define MCP2515_CS1 18
-#define MCP2515_INT1 35
+// Board-specific pin configuration
+#ifdef LILYGO_T2CAN
+  // LilyGO T-2CAN with built-in MCP2515
+  #ifndef MCP2515_SCK
+    #define SPI_SCK 12
+  #else
+    #define SPI_SCK MCP2515_SCK
+  #endif
+  
+  #ifndef MCP2515_MISO
+    #define SPI_MISO 13
+  #else
+    #define SPI_MISO MCP2515_MISO
+  #endif
+  
+  #ifndef MCP2515_MOSI
+    #define SPI_MOSI 11
+  #else
+    #define SPI_MOSI MCP2515_MOSI
+  #endif
+  
+  #ifndef MCP2515_CS
+    #define MCP2515_CS1 10
+  #else
+    #define MCP2515_CS1 MCP2515_CS
+  #endif
+  
+  #ifndef MCP2515_INT
+    #define MCP2515_INT1 8
+  #else
+    #define MCP2515_INT1 MCP2515_INT
+  #endif
+#else
+  // Default T-CAN485 wiring (custom SPI pins matching battery emulator)
+  #define SPI_SCK 12
+  #define SPI_MISO 34
+  #define SPI_MOSI 5
+  #define MCP2515_CS1 18
+  #define MCP2515_INT1 35
+#endif
 
 // Use pointer to avoid global constructor issues
 MCP_CAN* CAN2_ptr = nullptr;
 #define CAN2 (*CAN2_ptr)
+
+// External debug flag from main.cpp
+extern bool canDebugMcp2515Enabled;
 
 // MCP2515 #2 (CAN3) - hvis du vil have 3 CAN, ellers ignorer
 //#define MCP2515_CS2 19
@@ -75,6 +110,16 @@ inline bool sendCAN2(uint32_t id, uint8_t len, uint8_t *data) {
     return false;
   }
   byte result = CAN2.sendMsgBuf(id, 0, len, data);
+  
+  // Debug output hvis aktiveret
+  if (canDebugMcp2515Enabled) {
+    Serial.printf("[MCP2515 TX] 0x%03X [%d] ", id, len);
+    for (int i = 0; i < len; i++) {
+      Serial.printf("%02X ", data[i]);
+    }
+    Serial.println(result == CAN_OK ? "OK" : "FAIL");
+  }
+  
   return (result == CAN_OK);
 }
 
@@ -89,6 +134,16 @@ inline bool readCAN2(uint32_t &id, uint8_t &len, uint8_t *data) {
     CAN2.readMsgBuf(&rxId, &rxLen, data);
     id = rxId;
     len = rxLen;
+    
+    // Debug output hvis aktiveret
+    if (canDebugMcp2515Enabled) {
+      Serial.printf("[MCP2515 RX] 0x%03X [%d] ", id, len);
+      for (int i = 0; i < len; i++) {
+        Serial.printf("%02X ", data[i]);
+      }
+      Serial.println();
+    }
+    
     return true;
   }
   return false;
