@@ -81,10 +81,11 @@ struct BMWModule
 // Global variables
 BMWModule modules[MAX_MODULES];
 bool balancingActive = false;
-bool manualMode = false; // Start in AUTO mode - automatically balance when needed
+bool manualMode = true; // Start in MANUAL mode - gateway mode, no automatic balancing
 bool gatewayMode = true; // GATEWAY: Forward messages between BMS and slave modules
 bool externalMasterDetected = false;
-bool canDebugEnabled = false; // CAN bus debug logging (disabled by default to prevent Serial overflow)
+bool canDebugTwaiEnabled = false;    // TWAI (slave modules) debug logging
+bool canDebugMcp2515Enabled = true; // MCP2515 (BMS) debug logging - ENABLED
 float targetBalanceVoltage = 4.0f;
 uint8_t messageCounter = 0;
 uint8_t nextMessage = 0;
@@ -196,7 +197,7 @@ void initCAN()
 // Print CAN message to Serial for debugging
 void printCANMessage(const twai_message_t &msg, bool isTX)
 {
-  if (!canDebugEnabled)
+  if (!canDebugTwaiEnabled)
     return;
 
   // Only print RX messages to avoid Serial buffer overflow blocking TX transmission
@@ -393,7 +394,7 @@ void readCANMessages()
           memcpy(twai_msg.data, mcp_data, mcp_len);
           
           esp_err_t result = twai_transmit(&twai_msg, pdMS_TO_TICKS(10));
-          if (canDebugEnabled && result == ESP_OK)
+          if (canDebugMcp2515Enabled && result == ESP_OK)
           {
             Serial.printf("[GATEWAY] BMS→Slave: 0x%03X forwarded\n", mcp_id);
           }
@@ -418,7 +419,7 @@ void readCANMessages()
   {
     uint32_t id = twai_msg.identifier;
 
-    if (canDebugEnabled)
+    if (canDebugTwaiEnabled)
     {
       static uint32_t lastTwaiDebug = 0;
       if (millis() - lastTwaiDebug > 100)
@@ -441,16 +442,42 @@ void readCANMessages()
       // Forward slave module response back to BMS via MCP2515
       if (mcp2515_available)
       {
-        sendCAN2(id, twai_msg.data_length_code, twai_msg.data);
+        bool sendResult = sendCAN2(id, twai_msg.data_length_code, twai_msg.data);
         
-        if (canDebugEnabled)
+        // ALWAYS log cell voltage messages (0x120-0x15F) to debug BMS data reception
+        if ((id & 0xF60) >= 0x120 && (id & 0xF60) <= 0x150) 
         {
-          static uint32_t lastGatewayDebug = 0;
-          if (millis() - lastGatewayDebug > 100)
-          {
-            lastGatewayDebug = millis();
-            Serial.printf("[GATEWAY] Slave→BMS: 0x%03X forwarded\n", id);
-          }
+          Serial.printf("[CELLS->BMS] 0x%03X sent: %s\n", id, sendResult ? "OK" : "FAIL");
+        }
+        
+        // ALWAYS show forwarding status (rate limited) for debugging
+        static uint32_t lastGatewayDebug = 0;
+        static uint32_t forwardCount = 0;
+        static uint32_t failCount = 0;
+        
+        if (sendResult) {
+          forwardCount++;
+        } else {
+          failCount++;
+        }
+        
+        if (millis() - lastGatewayDebug > 5000) // Show stats every 5 seconds
+        {
+          lastGatewayDebug = millis();
+          Serial.printf("[GATEWAY] Forwarded: %d OK, %d FAIL (last: 0x%03X)\n", 
+                        forwardCount, failCount, id);
+          forwardCount = 0;
+          failCount = 0;
+        }
+      }
+      else
+      {
+        // MCP2515 not available - cannot forward to BMS
+        static uint32_t lastMcpWarning = 0;
+        if (millis() - lastMcpWarning > 10000) // Warn every 10 seconds
+        {
+          lastMcpWarning = millis();
+          Serial.println("[GATEWAY] ✗ MCP2515 not available - cannot forward to BMS!");
         }
       }
     }
@@ -556,7 +583,7 @@ void sendBalancingCommand()
   bool sendSuccess = (result == ESP_OK);
 
   // Always show TX debug when debug is enabled (rate limited)
-  if (canDebugEnabled)
+  if (canDebugTwaiEnabled)
   {
     static uint32_t lastTxDebug = 0;
     if (millis() - lastTxDebug > 200) // Show TX every 200ms
@@ -564,16 +591,16 @@ void sendBalancingCommand()
       lastTxDebug = millis();
       if (sendSuccess)
       {
-        Serial.printf("[BALANCE TX] 0x%03X [8] ", msg.identifier);
+        Serial.printf("[TWAI TX] 0x%03X [8] ", msg.identifier);
         for (int i = 0; i < 8; i++)
         {
           Serial.printf("%02X ", msg.data[i]);
         }
-        Serial.printf(" Target: %.3fV (balance + request voltages)\n", targetVoltage_mV / 1000.0f);
+        Serial.printf(" Target: %.3fV\n", targetVoltage_mV / 1000.0f);
       }
       else
       {
-        Serial.println("✗ Balance TX FAILED");
+        Serial.println("✗ TWAI TX FAILED");
       }
     }
   }
@@ -761,10 +788,15 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
           delay(500);
           ESP.restart();
         }
-        else if (strcmp(command, "toggleDebug") == 0)
+        else if (strcmp(command, "toggleDebugTwai") == 0)
         {
-          canDebugEnabled = !canDebugEnabled;
-          Serial.printf("CAN debug logging %s\n", canDebugEnabled ? "enabled" : "disabled");
+          canDebugTwaiEnabled = !canDebugTwaiEnabled;
+          Serial.printf("TWAI debug logging %s\n", canDebugTwaiEnabled ? "enabled" : "disabled");
+        }
+        else if (strcmp(command, "toggleDebugMcp2515") == 0)
+        {
+          canDebugMcp2515Enabled = !canDebugMcp2515Enabled;
+          Serial.printf("MCP2515 debug logging %s\n", canDebugMcp2515Enabled ? "enabled" : "disabled");
         }
         else if (strcmp(command, "setThreshold") == 0)
         {
@@ -1139,6 +1171,9 @@ const char index_html[] PROGMEM = R"rawliteral(
             bottom: 20px;
             right: 20px;
             z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
         }
         .debug-button button {
             background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
@@ -1241,7 +1276,8 @@ const char index_html[] PROGMEM = R"rawliteral(
     </div>
     
     <div class="debug-button">
-        <button id="debugBtn" onclick="toggleDebug()">🐛 CAN Debug: OFF</button>
+        <button id="debugBtnTwai" onclick="toggleDebugTwai()">🐛 TWAI Debug: OFF</button>
+        <button id="debugBtnMcp" onclick="toggleDebugMcp2515()">🐛 MCP2515 Debug: OFF</button>
     </div>
     
     <div class="container">
@@ -1543,12 +1579,21 @@ const char index_html[] PROGMEM = R"rawliteral(
             }
         }
         
-        let canDebugEnabled = false;
-        function toggleDebug() {
-            canDebugEnabled = !canDebugEnabled;
-            sendCommand('toggleDebug');
-            const btn = document.getElementById('debugBtn');
-            btn.textContent = canDebugEnabled ? '🐛 CAN Debug: ON' : '🐛 CAN Debug: OFF';
+        let canDebugTwaiEnabled = false;
+        let canDebugMcp2515Enabled = false;
+        
+        function toggleDebugTwai() {
+            canDebugTwaiEnabled = !canDebugTwaiEnabled;
+            sendCommand('toggleDebugTwai');
+            const btn = document.getElementById('debugBtnTwai');
+            btn.textContent = canDebugTwaiEnabled ? '🐛 TWAI Debug: ON' : '🐛 TWAI Debug: OFF';
+        }
+        
+        function toggleDebugMcp2515() {
+            canDebugMcp2515Enabled = !canDebugMcp2515Enabled;
+            sendCommand('toggleDebugMcp2515');
+            const btn = document.getElementById('debugBtnMcp');
+            btn.textContent = canDebugMcp2515Enabled ? '🐛 MCP2515 Debug: ON' : '🐛 MCP2515 Debug: OFF';
         }
         
         function uploadOTA() {
@@ -1698,50 +1743,9 @@ void setup()
     Serial.println("Please check SSID and password in code");
   }
 
-  // Setup OTA updates
-  Serial.println("\nConfiguring OTA updates...");
-  ArduinoOTA.setHostname("BMW-i3-Balancer");
-  ArduinoOTA.setPassword("bmw123"); // Change to secure password
-
-  ArduinoOTA.onStart([]()
-                     {
-    String type;
-    if (ArduinoOTA.getCommand() == U_FLASH) {
-      type = "sketch";
-    } else {
-      type = "filesystem";
-    }
-    Serial.println("OTA: Start updating " + type); });
-
-  ArduinoOTA.onEnd([]()
-                   { Serial.println("\nOTA: Update complete!"); });
-
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
-                        {
-    static unsigned int lastPercent = 0;
-    unsigned int percent = (progress / (total / 100));
-    if (percent != lastPercent && percent % 10 == 0) {
-      Serial.printf("OTA Progress: %u%%\n", percent);
-      lastPercent = percent;
-    }
-    // LED purple pulsing during OTA
-    uint8_t brightness = (millis() / 10) % 256;
-    if (brightness > 127) brightness = 255 - brightness;
-    brightness = brightness / 6;
-    led.setPixelColor(0, led.Color(brightness, 0, brightness));
-    led.show(); });
-
-  ArduinoOTA.onError([](ota_error_t error)
-                     {
-    Serial.printf("OTA Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-    else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
-
-  ArduinoOTA.begin();
-  Serial.println("✓ OTA ready");
+  // OTA DISABLED - causes FreeRTOS mutex conflicts after running for a while
+  // Use USB serial for updates instead
+  Serial.println("\n⚠ OTA updates DISABLED (prevents crashes)");
 
   // Setup WebSocket
   ws.onEvent(onWebSocketEvent);
@@ -1801,50 +1805,53 @@ void setup()
 void loop()
 {
   // Single-core mode: All tasks run on Core 1 (WiFi core)
-  // No mutex issues - everything runs sequentially
+  // CRITICAL: Give background tasks (AsyncTCP, WiFi stack) MAXIMUM time
+  // to prevent FreeRTOS mutex priority inheritance errors
 
-  // Handle OTA updates
-  ArduinoOTA.handle();
+  // OTA DISABLED - ArduinoOTA.handle() removed to prevent mutex conflicts
 
-  // Clean up WebSocket clients
-  ws.cleanupClients();
+  // Clean up WebSocket clients - very infrequently to prevent mutex issues
+  static uint32_t lastWSCleanup = 0;
+  if (millis() - lastWSCleanup > 5000) // Every 5 seconds only
+  {
+    lastWSCleanup = millis();
+    ws.cleanupClients();
+  }
 
-  // Update LED status
+  // Update LED status (safe operation)
   updateLED();
 
-  // CAN processing
+  // CAN processing (critical path)
   readCANMessages();
   sendBalancingCommand();
   updateBalancing();
 
-  // Broadcast data to WebSocket clients
+  // Broadcast data to WebSocket clients - ONLY if clients are connected
   static uint32_t lastBroadcast = 0;
-  if (millis() - lastBroadcast > 15000) // Every 15 seconds
+  if (ws.count() > 0 && millis() - lastBroadcast > 30000) // Only every 30 seconds
   {
     lastBroadcast = millis();
     performBroadcast();
   }
 
-  // Print status every 30 seconds (reduced to prevent Serial mutex conflict with WebSocket)
+  // Print status every 10 seconds
   static uint32_t lastStatusPrint = 0;
-  if (millis() - lastStatusPrint > 30000)
+  if (millis() - lastStatusPrint > 10000)
   {
     lastStatusPrint = millis();
 
-    // Only print if no WebSocket clients connected (to avoid mutex deadlock)
-    if (ws.count() == 0)
-    {
-      float lowestV = getLowestCellVoltage();
-      float highestV = getHighestCellVoltage();
+    float lowestV = getLowestCellVoltage();
+    float highestV = getHighestCellVoltage();
 
-      Serial.printf("Status: %s | Mode: %s | Cells: %.3fV-%.3fV (Δ%.1fmV)\n",
-                    balancingActive ? "BALANCING" : "GATEWAY",
-                    manualMode ? "MANUAL" : "AUTO",
-                    lowestV, highestV,
-                    (highestV - lowestV) * 1000.0f);
-    }
+    Serial.printf("Status: %s | Mode: %s | Cells: %.3fV-%.3fV (Δ%.1fmV)\n",
+                  balancingActive ? "BALANCING" : "GATEWAY",
+                  manualMode ? "MANUAL" : "AUTO",
+                  lowestV, highestV,
+                  (highestV - lowestV) * 1000.0f);
   }
 
-  // Small delay for task switching
-  delay(1); // 1ms delay
+  // Long delay + yield to give WiFi/AsyncTCP maximum processing time
+  yield();
+  delay(100); // 100ms delay - prevents task starvation
+  yield();
 }

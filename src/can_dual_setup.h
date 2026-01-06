@@ -49,6 +49,9 @@
 MCP_CAN* CAN2_ptr = nullptr;
 #define CAN2 (*CAN2_ptr)
 
+// External debug flag from main.cpp
+extern bool canDebugMcp2515Enabled;
+
 // MCP2515 #2 (CAN3) - hvis du vil have 3 CAN, ellers ignorer
 //#define MCP2515_CS2 19
 //#define MCP2515_INT2 36
@@ -107,6 +110,16 @@ inline bool sendCAN2(uint32_t id, uint8_t len, uint8_t *data) {
     return false;
   }
   byte result = CAN2.sendMsgBuf(id, 0, len, data);
+  
+  // Debug output hvis aktiveret
+  if (canDebugMcp2515Enabled) {
+    Serial.printf("[MCP2515 TX] 0x%03X [%d] ", id, len);
+    for (int i = 0; i < len; i++) {
+      Serial.printf("%02X ", data[i]);
+    }
+    Serial.println(result == CAN_OK ? "OK" : "FAIL");
+  }
+  
   return (result == CAN_OK);
 }
 
@@ -121,6 +134,16 @@ inline bool readCAN2(uint32_t &id, uint8_t &len, uint8_t *data) {
     CAN2.readMsgBuf(&rxId, &rxLen, data);
     id = rxId;
     len = rxLen;
+    
+    // Debug output hvis aktiveret
+    if (canDebugMcp2515Enabled) {
+      Serial.printf("[MCP2515 RX] 0x%03X [%d] ", id, len);
+      for (int i = 0; i < len; i++) {
+        Serial.printf("%02X ", data[i]);
+      }
+      Serial.println();
+    }
+    
     return true;
   }
   return false;
