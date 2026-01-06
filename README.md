@@ -17,14 +17,11 @@ Gateway balancing controller for BMW i3 battery modules - forwards messages betw
 
 ## Hardware Requirements
 
-### Supported Boards
+### Supported Board
 
-- **LilyGO T-CAN485** (ESP32 + CAN transceiver + MCP2515)
 - **LilyGO T-2CAN** (ESP32-S3 + dual CAN controllers)
 
-Choose the board that matches your hardware:
-- T-CAN485: Single CAN, best for basic standalone operation
-- T-2CAN: Dual CAN, supports gateway mode and dual-bus operation
+This board has the necessary dual CAN interface to handle gateway operations between BMS and battery modules.
 
 ### Additional Requirements
 
@@ -47,22 +44,6 @@ Choose the board that matches your hardware:
 - BMS requests **blokeres** (ikke videresendt)
 - ESP32 sender egne balancing commands + data requests til slave moduler
 - Slave moduler sender svar (0x100-0x1FF) → videresender **stadig** tilbage til BMS
-
-### LilyGO T-CAN485
-
-```
-TWAI CAN → BMW i3 Slave Modules
-  GPIO 27 (TX)
-  GPIO 26 (RX)
-  GPIO 23 (SE - Standby Enable)
-
-MCP2515 CAN → Ekstern BMS
-  GPIO 18 (CS)
-  GPIO 35 (INT)
-  GPIO 12 (SCK)
-  GPIO 5 (MOSI)
-  GPIO 34 (MISO)
-```
 
 ### LilyGO T-2CAN
 
@@ -102,13 +83,6 @@ const char* WIFI_PASSWORD = "YourWiFiPassword";
 
 ### 3. Upload Firmware
 
-**For T-CAN485:**
-```bash
-cd BMW-i3-Balancing-Controller
-pio run --target upload --environment lilygo_tcan485
-```
-
-**For T-2CAN:**
 ```bash
 cd BMW-i3-Balancing-Controller
 pio run --target upload --environment lilygo_t2can

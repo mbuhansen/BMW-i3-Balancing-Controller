@@ -3,21 +3,17 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
-#include <Adafruit_NeoPixel.h>
 #include <ArduinoOTA.h>
 #include <Update.h>
 
 #include "driver/twai.h"
 #include "can_dual_setup.h" // MCP2515 dual CAN
 
-// External flag from can_dual_setup.h
-extern bool mcp2515_available;
-
 // WiFi credentials - loaded from credentials.h (not tracked in git)
 #include "credentials.h"
 
 // ============================================================================
-// BMW i3 Balancing Controller for LilyGO T-CAN485
+// BMW i3 Balancing Controller for LilyGO T-2CAN
 // ============================================================================
 // GATEWAY MODE: Forward messages between BMS and slave modules
 // - MCP2515 (SPI): Connected to external BMS
@@ -27,32 +23,14 @@ extern bool mcp2515_available;
 // - Monitors cell voltages and automatically balances when needed
 // ============================================================================
 
-// Pin definitions - Auto-configured based on board type
-#ifdef LILYGO_T2CAN
-  // LilyGO T-2CAN with dual native CAN controllers
-  #ifndef CAN_TX_PIN
-    #define CAN_TX_PIN GPIO_NUM_7
-  #endif
-  #ifndef CAN_RX_PIN
-    #define CAN_RX_PIN GPIO_NUM_6
-  #endif
-  #ifndef LED_PIN
-    #define LED_PIN GPIO_NUM_35
-  #endif
-  #define CAN_SE_PIN GPIO_NUM_NC // No standby pin on T-2CAN
-#else
-  // LilyGO T-CAN485 (default)
-  #ifndef CAN_TX_PIN
-    #define CAN_TX_PIN GPIO_NUM_27
-  #endif
-  #ifndef CAN_RX_PIN
-    #define CAN_RX_PIN GPIO_NUM_26
-  #endif
-  #ifndef LED_PIN
-    #define LED_PIN GPIO_NUM_4 // WS2812 RGB LED
-  #endif
-  #define CAN_SE_PIN GPIO_NUM_23
+// Pin definitions - LilyGO T-2CAN with dual CAN controllers
+#ifndef CAN_TX_PIN
+  #define CAN_TX_PIN GPIO_NUM_7
 #endif
+#ifndef CAN_RX_PIN
+  #define CAN_RX_PIN GPIO_NUM_6
+#endif
+#define CAN_SE_PIN GPIO_NUM_NC // No standby pin on T-2CAN
 
 // Configuration
 #define MAX_MODULES 8
@@ -60,7 +38,7 @@ extern bool mcp2515_available;
 #define MIN_BALANCE_VOLTAGE 3.9f   // Minimum voltage to start balancing (V)
 #define BALANCE_THRESHOLD_MV 10    // Start balancing if cells differ by more than 10mV
 #define BALANCE_HYSTERESIS_MV 5    // Stop balancing when within 5mV
-#define CAN_COMMAND_INTERVAL_MS 50 // Send commands every 50ms
+#define CAN_COMMAND_INTERVAL_MS 20 // Send commands every 20ms (match BMS rate)
 
 // BMW CRC8 Lookup table and finalxor values (from SimpleBMS)
 const uint8_t finalxor[12] = {0xCF, 0xF5, 0xBB, 0x81, 0x27, 0x1D, 0x53, 0x69, 0x02, 0x38, 0x76, 0x4C};
@@ -98,12 +76,6 @@ uint32_t lastDataUpdate = 0;
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
-
-// LED control
-Adafruit_NeoPixel led(1, LED_PIN, NEO_GRB + NEO_KHZ800);
-uint8_t ledBrightness = 0;
-uint32_t lastLedUpdate = 0;
-bool ledAvailable = false; // Track if LED is working
 
 // CRC8 calculation for BMW CAN messages
 class CRC8
@@ -200,33 +172,10 @@ void printCANMessage(const twai_message_t &msg, bool isTX)
   if (!canDebugTwaiEnabled)
     return;
 
-  // Only print RX messages to avoid Serial buffer overflow blocking TX transmission
-  // TX messages create too much Serial output and prevent actual CAN transmission
-  if (isTX)
-    return;
-
-  // Filter out noisy/repetitive messages to reduce Serial load
-  uint32_t id = msg.identifier;
-
-  // Skip empty status messages (0x100-0x107) - just 00 00 00 00 00 00
-  if (id >= 0x100 && id <= 0x107)
-    return;
-
-  // Skip repetitive 0x22 messages (0x1C0-0x1C7, 0x1D0-0x1D7)
-  if ((id >= 0x1C0 && id <= 0x1C7) || (id >= 0x1D0 && id <= 0x1D7))
-    return;
-
-  // Skip temperature messages for now (0x170-0x177) - not critical during balancing debug
-  if (id >= 0x170 && id <= 0x177)
-    return;
-
   char direction[4];
   strcpy(direction, isTX ? "TX" : "RX");
 
-  char hexStr[32];
-  sprintf(hexStr, "%03X", msg.identifier);
-
-  Serial.printf("[CAN %s] ID: 0x%s [%d] ", direction, hexStr, msg.data_length_code);
+  Serial.printf("[TWAI %s] 0x%03X [%d] ", direction, msg.identifier, msg.data_length_code);
 
   for (int i = 0; i < msg.data_length_code; i++)
   {
@@ -369,36 +318,37 @@ void readCANMessages()
 {
   // ========== Read from MCP2515 (BMS side) ==========
   // BMS sends requests (0x080-0x08F) to slave modules
-  if (mcp2515_available)
-  {
-    uint32_t mcp_id;
-    uint8_t mcp_len;
-    uint8_t mcp_data[8];
+  uint32_t mcp_id;
+  uint8_t mcp_len;
+  uint8_t mcp_data[8];
 
-    int msgCount = 0;
-    while (readCAN2(mcp_id, mcp_len, mcp_data) && msgCount++ < 20)
+  int msgCount = 0;
+  while (readCAN2(mcp_id, mcp_len, mcp_data) && msgCount++ < 20)
+  {
     {
       // BMS request to slave modules (0x080-0x08F)
       if ((mcp_id & 0xFF0) == 0x080)
       {
-        // Only forward if NOT balancing (when balancing, we send our own commands)
-        if (!balancingActive)
+        // Always forward BMS requests - but modify byte 4 during balancing
+        twai_message_t twai_msg;
+        twai_msg.identifier = mcp_id;
+        twai_msg.data_length_code = mcp_len;
+        twai_msg.flags = TWAI_MSG_FLAG_NONE;
+        twai_msg.extd = 0;
+        twai_msg.rtr = 0;
+        memcpy(twai_msg.data, mcp_data, mcp_len);
+        
+        // If balancing is active, modify byte 4 to enable balancing (0x08)
+        if (balancingActive && mcp_len >= 8)
         {
-          // Forward BMS request to slave modules via TWAI
-          twai_message_t twai_msg;
-          twai_msg.identifier = mcp_id;
-          twai_msg.data_length_code = mcp_len;
-          twai_msg.flags = TWAI_MSG_FLAG_NONE;
-          twai_msg.extd = 0;
-          twai_msg.rtr = 0;
-          memcpy(twai_msg.data, mcp_data, mcp_len);
+          twai_msg.data[4] = 0x08;  // Enable balancing
           
-          esp_err_t result = twai_transmit(&twai_msg, pdMS_TO_TICKS(10));
-          if (canDebugMcp2515Enabled && result == ESP_OK)
-          {
-            Serial.printf("[GATEWAY] BMS→Slave: 0x%03X forwarded\n", mcp_id);
-          }
+          // Recalculate CRC (byte 7)
+          uint8_t msgId = mcp_id & 0x0F;
+          twai_msg.data[7] = calculateChecksum(twai_msg, msgId);
         }
+        
+        twai_transmit(&twai_msg, pdMS_TO_TICKS(10));
       }
       // Parse module data for monitoring (0x100-0x1FF)
       else if ((mcp_id & 0xF00) == 0x100)
@@ -440,46 +390,7 @@ void readCANMessages()
       parseModuleMessage(twai_msg);
       
       // Forward slave module response back to BMS via MCP2515
-      if (mcp2515_available)
-      {
-        bool sendResult = sendCAN2(id, twai_msg.data_length_code, twai_msg.data);
-        
-        // ALWAYS log cell voltage messages (0x120-0x15F) to debug BMS data reception
-        if ((id & 0xF60) >= 0x120 && (id & 0xF60) <= 0x150) 
-        {
-          Serial.printf("[CELLS->BMS] 0x%03X sent: %s\n", id, sendResult ? "OK" : "FAIL");
-        }
-        
-        // ALWAYS show forwarding status (rate limited) for debugging
-        static uint32_t lastGatewayDebug = 0;
-        static uint32_t forwardCount = 0;
-        static uint32_t failCount = 0;
-        
-        if (sendResult) {
-          forwardCount++;
-        } else {
-          failCount++;
-        }
-        
-        if (millis() - lastGatewayDebug > 5000) // Show stats every 5 seconds
-        {
-          lastGatewayDebug = millis();
-          Serial.printf("[GATEWAY] Forwarded: %d OK, %d FAIL (last: 0x%03X)\n", 
-                        forwardCount, failCount, id);
-          forwardCount = 0;
-          failCount = 0;
-        }
-      }
-      else
-      {
-        // MCP2515 not available - cannot forward to BMS
-        static uint32_t lastMcpWarning = 0;
-        if (millis() - lastMcpWarning > 10000) // Warn every 10 seconds
-        {
-          lastMcpWarning = millis();
-          Serial.println("[GATEWAY] ✗ MCP2515 not available - cannot forward to BMS!");
-        }
-      }
+      sendCAN2(id, twai_msg.data_length_code, twai_msg.data);
     }
   }
 }
@@ -527,95 +438,8 @@ float getHighestCellVoltage()
 // Send balancing command AND voltage requests to slave modules via TWAI
 // When balancing: Replaces BMS requests with our own (balance + data request)
 // When not balancing: Does nothing (BMS requests are forwarded instead)
-void sendBalancingCommand()
-{
-  // GATEWAY MODE: Only send when balancing is active
-  // When not balancing, BMS requests are forwarded through gateway
-  if (!balancingActive)
-    return;
-
-  // Throttle sending - send every 50ms
-  if (millis() - lastCommandTime < CAN_COMMAND_INTERVAL_MS)
-    return;
-
-  // Cache target voltage to avoid calling getLowestCellVoltage() during critical operations
-  static float cachedLowestVoltage = 4.0f;
-  static uint32_t lastVoltageCacheUpdate = 0;
-
-  // Update cached voltage every 500ms (not every send)
-  if (millis() - lastVoltageCacheUpdate > 500)
-  {
-    cachedLowestVoltage = getLowestCellVoltage();
-    lastVoltageCacheUpdate = millis();
-  }
-
-  // Cycle through message counter
-  if (messageCounter == 0xF)
-    messageCounter = 0;
-
-  // Build command message with BOTH balancing target AND data request
-  // This replaces the BMS request that we're blocking during balancing
-  twai_message_t msg;
-  msg.identifier = 0x080 | nextMessage;  // Send to next module (0-7)
-  msg.data_length_code = 8;
-  msg.flags = TWAI_MSG_FLAG_NONE;
-  msg.extd = 0;
-  msg.rtr = 0;
-
-  // Byte 0-1: Target voltage for balancing (lowest cell + 2mV)
-  targetBalanceVoltage = cachedLowestVoltage;
-  uint16_t targetVoltage_mV = (uint16_t)((targetBalanceVoltage * 1000) + 2);
-  msg.data[0] = targetVoltage_mV & 0xFF;
-  msg.data[1] = (targetVoltage_mV >> 8) & 0xFF;
-
-  // Request pattern matching actual BMW BMS behavior (from logs)
-  // Byte 2-3: Always 0xFF 0x5F (request voltage + temp + balance status)
-  // Byte 4: 0x08 to enable balancing
-  msg.data[2] = 0xFF;
-  msg.data[3] = 0x5F; // Request voltage + temp + balance status
-  msg.data[4] = 0x08; // Enable balancing
-  msg.data[5] = 0x00;
-  msg.data[6] = messageCounter << 4;
-  msg.data[7] = calculateChecksum(msg, nextMessage);
-
-  // GATEWAY MODE: Send balancing command via TWAI to slave modules
-  esp_err_t result = twai_transmit(&msg, pdMS_TO_TICKS(10));
-  bool sendSuccess = (result == ESP_OK);
-
-  // Always show TX debug when debug is enabled (rate limited)
-  if (canDebugTwaiEnabled)
-  {
-    static uint32_t lastTxDebug = 0;
-    if (millis() - lastTxDebug > 200) // Show TX every 200ms
-    {
-      lastTxDebug = millis();
-      if (sendSuccess)
-      {
-        Serial.printf("[TWAI TX] 0x%03X [8] ", msg.identifier);
-        for (int i = 0; i < 8; i++)
-        {
-          Serial.printf("%02X ", msg.data[i]);
-        }
-        Serial.printf(" Target: %.3fV\n", targetVoltage_mV / 1000.0f);
-      }
-      else
-      {
-        Serial.println("✗ TWAI TX FAILED");
-      }
-    }
-  }
-  else if (!sendSuccess)
-  {
-    Serial.println("✗ Failed to send balancing command via TWAI");
-  }
-
-  // Update lastCommandTime AFTER successful transmission
-  lastCommandTime = millis();
-
-  // Increment message counter
-  messageCounter++;
-  nextMessage = (nextMessage + 1) % 8;
-}
+// Balancing is now handled by intercepting BMS requests in readCANMessages()
+// When balancingActive=true, we modify byte 4 to 0x08 in BMS requests
 
 // Update balancing logic
 void updateBalancing()
@@ -655,7 +479,6 @@ void updateBalancing()
   {
     // Start balancing
     balancingActive = true;
-    targetBalanceVoltage = lowestVoltage;
     Serial.printf("Starting balancing: Lowest=%.3fV, Highest=%.3fV, Diff=%.1fmV\n",
                   lowestVoltage, highestVoltage, difference_mV);
   }
@@ -671,64 +494,6 @@ void updateBalancing()
     balancingActive = false;
     Serial.printf("Stopping balancing: Cell voltage too low (%.3fV)\n", highestVoltage);
   }
-
-  // Update target voltage during balancing
-  if (balancingActive)
-  {
-    targetBalanceVoltage = lowestVoltage;
-  }
-}
-
-// Update LED based on status
-void updateLED()
-{
-  // Skip if LED is not available
-  if (!ledAvailable)
-    return;
-
-  if (millis() - lastLedUpdate < 50) // Update every 50ms
-    return;
-  lastLedUpdate = millis();
-
-  // Check for errors (no modules detected)
-  bool hasError = true;
-  for (int m = 0; m < MAX_MODULES; m++)
-  {
-    if (modules[m].exists && (millis() - modules[m].lastUpdate < 5000))
-    {
-      hasError = false;
-      break;
-    }
-  }
-
-  if (hasError && (millis() > 5000)) // Give 5 seconds at startup
-  {
-    // Red pulsing - Error (no modules) - HIGHEST PRIORITY
-    ledBrightness = (millis() / 10) % 256;
-    if (ledBrightness > 127)
-      ledBrightness = 255 - ledBrightness;
-    ledBrightness = ledBrightness / 3; // Max brightness 40
-    led.setPixelColor(0, led.Color(ledBrightness, 0, 0));
-    led.show();
-    return;
-  }
-
-  if (balancingActive)
-  {
-    // Blue pulsing - Balancing active
-    ledBrightness = (millis() / 10) % 256;
-    if (ledBrightness > 127)
-      ledBrightness = 255 - ledBrightness;
-    ledBrightness = ledBrightness / 3; // Max brightness 40
-    led.setPixelColor(0, led.Color(0, 0, ledBrightness));
-  }
-  else
-  {
-    // Green solid - Standby/OK
-    led.setPixelColor(0, led.Color(0, 20, 0));
-  }
-
-  led.show();
 }
 
 // WebSocket event handler
@@ -762,8 +527,7 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         {
           balancingActive = true;
           manualMode = true;
-          targetBalanceVoltage = getLowestCellVoltage();
-          Serial.println("Manual start - balancing active (blocks BMS requests)");
+          Serial.println("Manual start - balancing active (intercepts BMS requests)");
         }
         else if (strcmp(command, "stop") == 0)
         {
@@ -775,12 +539,6 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         {
           manualMode = false;
           Serial.println("Auto mode - smart balancing enabled");
-        }
-        else if (strcmp(command, "gateway") == 0)
-        {
-          balancingActive = false;
-          manualMode = true;
-          Serial.println("Gateway mode - forwarding BMS requests");
         }
         else if (strcmp(command, "restart") == 0)
         {
@@ -874,13 +632,11 @@ void performBroadcast()
 
   doc["status"] = status;
   doc["mode"] = mode;
-  doc["targetVoltage"] = targetBalanceVoltage;
   doc["lowestVoltage"] = lowestVoltage;
   doc["highestVoltage"] = highestVoltage;
   doc["difference"] = (highestVoltage - lowestVoltage) * 1000.0f;
   doc["gatewayMode"] = gatewayMode;
   doc["externalMaster"] = externalMasterDetected && (millis() - lastExternalCommandTime < 60000);
-  doc["mcp2515Available"] = mcp2515_available;
   doc["uptime"] = millis() / 1000;
 
   JsonArray modulesArray = doc["modules"].to<JsonArray>();
@@ -1313,9 +1069,8 @@ const char index_html[] PROGMEM = R"rawliteral(
         
         <div class="controls">
             <button onclick="sendCommand('start')">▶ Start Balancing</button>
-            <button class="stop" onclick="sendCommand('stop')">⏹ Stop / Gateway</button>
+            <button class="stop" onclick="sendCommand('stop')">⏹ Stop</button>
             <button class="auto" onclick="sendCommand('auto')">🔄 Auto Mode</button>
-            <button onclick="sendCommand('gateway')">🔀 Gateway Mode</button>
         </div>
         
         <div class="modules" id="modules">
@@ -1655,36 +1410,12 @@ void setup()
 
   Serial.println("\n\n=================================");
   Serial.println("BMW i3 Balancing Controller");
-  Serial.println("LilyGO T-CAN485 + MCP2515");
+  Serial.println("LilyGO T-2CAN");
   Serial.println("Dual CAN Gateway Mode");
   Serial.println("=================================\n");
 
   // Pre-initialize MCP2515 pins before any library calls
   initMCP2515Pins();
-
-  // Initialize LED (non-critical - continue if fails)
-  // T-2CAN doesn't have onboard LED
-  #ifndef LILYGO_T2CAN
-  Serial.println("Initializing LED...");
-  led.begin();
-
-  // Test if LED is working - if not, just continue without it
-  led.setPixelColor(0, led.Color(20, 20, 0)); // Yellow during startup
-  if (!led.canShow())
-  {
-    Serial.println("⚠ LED initialization failed - continuing without LED");
-    ledAvailable = false;
-  }
-  else
-  {
-    led.show();
-    ledAvailable = true;
-    Serial.println("✓ LED initialized");
-  }
-  #else
-  Serial.println("⚠ T-2CAN board has no onboard LED - LED disabled");
-  ledAvailable = false;
-  #endif
 
   // Initialize TWAI CAN bus (Slave modules side)
   Serial.println("Initializing TWAI CAN bus (Slave modules)...");
@@ -1792,25 +1523,19 @@ void setup()
   Serial.println("\nGateway Architecture:");
   Serial.println("  MCP2515 (BMS) <-> ESP32 <-> TWAI (Slave Modules)");
   Serial.println("  Normal: Forward BMS requests → slaves, responses → BMS");
-  Serial.println("  Balancing: Block BMS, send own commands, forward responses\n");
+  Serial.println("  Balancing: Intercept BMS requests, modify byte 4 to 0x08\n");
 
   if (WiFi.status() == WL_CONNECTED)
   {
     Serial.printf("Access the interface at: http://%s\n\n", WiFi.localIP().toString().c_str());
   }
-
-  Serial.println("\n✓ Single-core mode - all tasks on Core 1\n");
 }
 
 void loop()
 {
-  // Single-core mode: All tasks run on Core 1 (WiFi core)
-  // CRITICAL: Give background tasks (AsyncTCP, WiFi stack) MAXIMUM time
-  // to prevent FreeRTOS mutex priority inheritance errors
-
   // OTA DISABLED - ArduinoOTA.handle() removed to prevent mutex conflicts
 
-  // Clean up WebSocket clients - very infrequently to prevent mutex issues
+  // Clean up WebSocket clients
   static uint32_t lastWSCleanup = 0;
   if (millis() - lastWSCleanup > 5000) // Every 5 seconds only
   {
@@ -1818,12 +1543,8 @@ void loop()
     ws.cleanupClients();
   }
 
-  // Update LED status (safe operation)
-  updateLED();
-
   // CAN processing (critical path)
-  readCANMessages();
-  sendBalancingCommand();
+  readCANMessages();  // Handles both gateway and balancing (via intercept)
   updateBalancing();
 
   // Broadcast data to WebSocket clients - ONLY if clients are connected
@@ -1850,8 +1571,8 @@ void loop()
                   (highestV - lowestV) * 1000.0f);
   }
 
-  // Long delay + yield to give WiFi/AsyncTCP maximum processing time
+  // Short delay to keep up with BMS 20ms timing while giving WiFi time
   yield();
-  delay(100); // 100ms delay - prevents task starvation
+  delay(1); // 1ms delay - fast enough for BMS intercept
   yield();
 }

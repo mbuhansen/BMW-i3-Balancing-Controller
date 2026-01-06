@@ -7,23 +7,23 @@ ESP32'en fungerer nu som en **CAN Gateway/Proxy** mellem BMW BMS og slave module
 ```
 ┌─────────────┐         ┌──────────────────┐         ┌──────────────┐
 │  BMW BMS    │ ◄─────► │  ESP32 Gateway   │ ◄─────► │ Slave Modul  │
-│             │  TWAI   │  (LilyGO T-CAN)  │ MCP2515 │   1-8        │
+│             │ MCP2515 │  (LilyGO T-2CAN) │  TWAI   │   1-8        │
 └─────────────┘         └──────────────────┘         └──────────────┘
 ```
 
 ## 🚌 CAN Bus Opdeling
 
-### **CAN Bus 1 - TWAI (ESP32 Indbygget)**
-- **Hardware:** LilyGO T-CAN485 indbygget CAN controller
-- **Pin:** GPIO 26 (RX), GPIO 27 (TX)
+### **CAN Bus 1 - MCP2515 (SPI)**
+- **Hardware:** LilyGO T-2CAN indbygget MCP2515 CAN controller (CAN A)
+- **Pin:** GPIO 10 (CS), GPIO 8 (INT), GPIO 12 (SCK), GPIO 11 (MOSI), GPIO 13 (MISO)
 - **Forbindelse:** BMW BMS
 - **Funktion:** 
   - Modtager kommandoer fra BMW BMS (ID `0x080-0x087`)
   - Sender modul svar tilbage til BMS (ID `0x100-0x1FF`)
 
-### **CAN Bus 2 - MCP2515 (SPI)**
-- **Hardware:** MCP2515 CAN controller via SPI
-- **Pin:** CS=GPIO 18, INT=GPIO 35
+### **CAN Bus 2 - TWAI (ESP32-S3 Indbygget)**
+- **Hardware:** T-2CAN indbygget CAN controller (CAN B)
+- **Pin:** GPIO 7 (TX), GPIO 6 (RX)
 - **Forbindelse:** BMW i3 Slave Moduler
 - **Funktion:**
   - Sender kommandoer til modulerne (ID `0x080-0x087`)
@@ -160,14 +160,15 @@ Se real-time:
 
 ### Forbindelser
 ```
-LilyGO T-CAN485:
-  - TWAI CAN H/L → BMW BMS CAN
-  - GPIO 18 (CS) → MCP2515 CS
-  - GPIO 35 (INT) → MCP2515 INT
-  - SPI (MISO/MOSI/SCK) → MCP2515 SPI
+LilyGO T-2CAN:
+  - MCP2515 CAN A (H/L) → BMW BMS CAN
+  - GPIO 10 (CS) → MCP2515 CS
+  - GPIO 8 (INT) → MCP2515 INT
+  - SPI (GPIO 13 MISO / GPIO 11 MOSI / GPIO 12 SCK) → MCP2515 SPI
+  - TWAI CAN B (GPIO 7 TX / GPIO 6 RX) → Slave Module CAN bus
 
 MCP2515:
-  - CAN H/L → Slave Module CAN bus
+  - CAN H/L → BMS CAN bus
   - 8 MHz crystal
   - 500 kbps baud rate
 ```
