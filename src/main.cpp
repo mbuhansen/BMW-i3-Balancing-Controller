@@ -1412,6 +1412,10 @@ void setup()
   Serial.println("BMW i3 Balancing Controller");
   Serial.println("LilyGO T-2CAN");
   Serial.println("Dual CAN Gateway Mode");
+  Serial.println("=================================");
+  Serial.println("\nCAN Bus Connections:");
+  Serial.println("  CAN A (TWAI)   → Slave Modules");
+  Serial.println("  CAN B (MCP2515) → BMS");
   Serial.println("=================================\n");
 
   // Pre-initialize MCP2515 pins before any library calls

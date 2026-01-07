@@ -37,6 +37,12 @@
   #define MCP2515_INT1 MCP2515_INT
 #endif
 
+#ifndef MCP2515_RST
+  #define MCP2515_RST1 9
+#else
+  #define MCP2515_RST1 MCP2515_RST
+#endif
+
 // External debug flag from main.cpp
 extern bool canDebugMcp2515Enabled;
 
@@ -45,6 +51,13 @@ ACAN2515* CAN2_ptr = nullptr;
 
 // Early pin initialization
 inline void initMCP2515Pins() {
+  // Reset MCP2515
+  pinMode(MCP2515_RST1, OUTPUT);
+  digitalWrite(MCP2515_RST1, LOW);
+  delay(10);
+  digitalWrite(MCP2515_RST1, HIGH);
+  delay(50);
+  
   pinMode(MCP2515_CS1, OUTPUT);
   digitalWrite(MCP2515_CS1, HIGH);
   pinMode(MCP2515_INT1, INPUT);
