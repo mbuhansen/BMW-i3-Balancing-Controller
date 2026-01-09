@@ -16,10 +16,10 @@
 // BMW i3 Balancing Controller for LilyGO T-2CAN
 // ============================================================================
 // GATEWAY MODE: Forward messages between BMS and slave modules
-// - MCP2515 (SPI): Connected to external BMS
-// - TWAI (ESP32): Connected to BMW i3 slave modules
+// - TWAI (ESP32): Connected to external BMS
+// - MCP2515 (SPI): Connected to BMW i3 slave modules
 // - Normal: Forward BMS requests (0x080-0x08F) → slave modules, responses (0x100-0x1FF) → BMS
-// - Balancing: Block BMS requests, send own balancing commands, forward responses to BMS
+// - Balancing: Intercept BMS requests, modify byte 4 to 0x08, forward responses to BMS
 // - Monitors cell voltages and automatically balances when needed
 // ============================================================================
 
@@ -62,8 +62,8 @@ bool balancingActive = false;
 bool manualMode = true; // Start in MANUAL mode - gateway mode, no automatic balancing
 bool gatewayMode = true; // GATEWAY: Forward messages between BMS and slave modules
 bool externalMasterDetected = false;
-bool canDebugTwaiEnabled = false;    // TWAI (slave modules) debug logging
-bool canDebugMcp2515Enabled = true; // MCP2515 (BMS) debug logging - ENABLED
+bool canDebugTwaiEnabled = true;     // TWAI (BMS) debug logging - ENABLED
+bool canDebugMcp2515Enabled = true; // MCP2515 (slave modules) debug logging - ENABLED
 float targetBalanceVoltage = 4.0f;
 uint8_t messageCounter = 0;
 uint8_t nextMessage = 0;
@@ -316,63 +316,58 @@ void parseModuleMessage(const twai_message_t &msg)
 // GATEWAY MODE: Forward messages between BMS and slave modules
 void readCANMessages()
 {
-  // ========== Read from MCP2515 (BMS side) ==========
-  // BMS sends requests (0x080-0x08F) to slave modules
+  // ========== PRIORITY: Read from MCP2515 (Slave Module Responses) FIRST ==========
+  // Read responses from slave modules to prevent TX buffer blocking
   uint32_t mcp_id;
   uint8_t mcp_len;
   uint8_t mcp_data[8];
 
-  int msgCount = 0;
-  while (readCAN2(mcp_id, mcp_len, mcp_data) && msgCount++ < 20)
+  int mcp_rx_count = 0;
+  while (readCAN2(mcp_id, mcp_len, mcp_data) && mcp_rx_count++ < 30)
   {
+    // Parse module data for monitoring (0x100-0x1FF)
+    if ((mcp_id & 0xF00) == 0x100)
     {
-      // BMS request to slave modules (0x080-0x08F)
-      if ((mcp_id & 0xFF0) == 0x080)
+      twai_message_t temp_msg;
+      temp_msg.identifier = mcp_id;
+      temp_msg.data_length_code = mcp_len;
+      memcpy(temp_msg.data, mcp_data, mcp_len);
+      parseModuleMessage(temp_msg);
+      
+      // Only forward specific responses back to BMS (0x100-0x10F = direct module responses)
+      // Filter out other module messages (0x1C0-0x1FF = status/diagnostic messages)
+      bool shouldForward = (mcp_id >= 0x100 && mcp_id <= 0x10F);
+      
+      if (shouldForward)
       {
-        // Always forward BMS requests - but modify byte 4 during balancing
-        twai_message_t twai_msg;
-        twai_msg.identifier = mcp_id;
-        twai_msg.data_length_code = mcp_len;
-        twai_msg.flags = TWAI_MSG_FLAG_NONE;
-        twai_msg.extd = 0;
-        twai_msg.rtr = 0;
-        memcpy(twai_msg.data, mcp_data, mcp_len);
+        // Forward slave module response back to BMS via TWAI
+        twai_message_t forward_msg;
+        forward_msg.identifier = mcp_id;
+        forward_msg.data_length_code = mcp_len;
+        forward_msg.flags = TWAI_MSG_FLAG_NONE;
+        forward_msg.extd = 0;
+        forward_msg.rtr = 0;
+        memcpy(forward_msg.data, mcp_data, mcp_len);
         
-        // If balancing is active, modify byte 4 to enable balancing (0x08)
-        if (balancingActive && mcp_len >= 8)
-        {
-          twai_msg.data[4] = 0x08;  // Enable balancing
-          
-          // Recalculate CRC (byte 7)
-          uint8_t msgId = mcp_id & 0x0F;
-          twai_msg.data[7] = calculateChecksum(twai_msg, msgId);
-        }
-        
-        twai_transmit(&twai_msg, pdMS_TO_TICKS(10));
-      }
-      // Parse module data for monitoring (0x100-0x1FF)
-      else if ((mcp_id & 0xF00) == 0x100)
-      {
-        twai_message_t temp_msg;
-        temp_msg.identifier = mcp_id;
-        temp_msg.data_length_code = mcp_len;
-        memcpy(temp_msg.data, mcp_data, mcp_len);
-        parseModuleMessage(temp_msg);
+        twai_transmit(&forward_msg, pdMS_TO_TICKS(10));
       }
     }
   }
 
-  // ========== Read from TWAI (Slave Modules) ==========
-  // Slave modules send responses (0x100-0x1FF) back
+  // ========== Read from TWAI (BMS Requests) and forward to MCP2515 ==========
+  // BMS sends requests (0x080-0x08F) to slave modules
   twai_message_t twai_msg;
-  while (twai_receive(&twai_msg, 0) == ESP_OK)
+  int twai_msg_count = 0;
+  
+  while (twai_receive(&twai_msg, 0) == ESP_OK && twai_msg_count++ < 10)
   {
     uint32_t id = twai_msg.identifier;
 
+    // Debug output throttled to reduce Serial overhead
     if (canDebugTwaiEnabled)
     {
       static uint32_t lastTwaiDebug = 0;
-      if (millis() - lastTwaiDebug > 100)
+      if (millis() - lastTwaiDebug > 200)  // Only every 200ms
       {
         lastTwaiDebug = millis();
         Serial.printf("[TWAI RX] 0x%03X [%d] ", id, twai_msg.data_length_code);
@@ -384,13 +379,64 @@ void readCANMessages()
       }
     }
 
-    // Parse module data for monitoring (0x100-0x1FF)
-    if ((id & 0xF00) == 0x100)
+    // BMS request to slave modules (0x080-0x08F)
+    if ((id & 0xFF0) == 0x080)
     {
-      parseModuleMessage(twai_msg);
+      // Forward BMS requests to slave modules via MCP2515
+      // Modify byte 4 if balancing is active
+      uint8_t send_data[8];
+      memcpy(send_data, twai_msg.data, twai_msg.data_length_code);
       
-      // Forward slave module response back to BMS via MCP2515
-      sendCAN2(id, twai_msg.data_length_code, twai_msg.data);
+      if (balancingActive && twai_msg.data_length_code >= 8)
+      {
+        send_data[4] = 0x08;  // Enable balancing
+        
+        // Recalculate CRC (byte 7)
+        uint8_t msgId = id & 0x0F;
+        twai_message_t temp_msg;
+        temp_msg.identifier = id;
+        temp_msg.data_length_code = twai_msg.data_length_code;
+        memcpy(temp_msg.data, send_data, 8);
+        send_data[7] = calculateChecksum(temp_msg, msgId);
+      }
+      
+      // Try to send, but don't block if buffer is full
+      bool sent = sendCAN2(id, twai_msg.data_length_code, send_data);
+      
+      // If send failed, read any pending RX to clear space
+      if (!sent)
+      {
+        static uint32_t lastDropWarning = 0;
+        static uint32_t failCount = 0;
+        
+        // Try to read pending RX messages to free TX buffer
+        if (canReadCAN2()) {
+          uint32_t mcp_id;
+          uint8_t mcp_len;
+          uint8_t mcp_data[8];
+          while (readCAN2(mcp_id, mcp_len, mcp_data)) {
+            // Forward any responses to BMS
+            if (mcp_id >= 0x100 && mcp_id <= 0x10F) {
+              twai_message_t forward_msg;
+              forward_msg.identifier = mcp_id;
+              forward_msg.data_length_code = mcp_len;
+              forward_msg.flags = TWAI_MSG_FLAG_NONE;
+              forward_msg.extd = 0;
+              forward_msg.rtr = 0;
+              memcpy(forward_msg.data, mcp_data, mcp_len);
+              twai_transmit(&forward_msg, pdMS_TO_TICKS(10));
+            }
+          }
+        }
+        
+        failCount++;
+        if (millis() - lastDropWarning > 1000)
+        {
+          Serial.printf("⚠ MCP2515 TX full - dropped %lu BMS requests (cleared RX buffer)\n", failCount);
+          failCount = 0;
+          lastDropWarning = millis();
+        }
+      }
     }
   }
 }
@@ -1414,8 +1460,8 @@ void setup()
   Serial.println("Dual CAN Gateway Mode");
   Serial.println("=================================");
   Serial.println("\nCAN Bus Connections:");
-  Serial.println("  CAN A (TWAI)   → Slave Modules");
-  Serial.println("  CAN B (MCP2515) → BMS");
+  Serial.println("  CAN A (MCP2515) → Slave Modules");
+  Serial.println("  CAN B (TWAI)    → BMS");
   Serial.println("=================================\n");
 
   // Pre-initialize MCP2515 pins before any library calls
@@ -1525,7 +1571,7 @@ void setup()
 
   Serial.println("\n✓ Setup complete!");
   Serial.println("\nGateway Architecture:");
-  Serial.println("  MCP2515 (BMS) <-> ESP32 <-> TWAI (Slave Modules)");
+  Serial.println("  TWAI (BMS) <-> ESP32 <-> MCP2515 (Slave Modules)");
   Serial.println("  Normal: Forward BMS requests → slaves, responses → BMS");
   Serial.println("  Balancing: Intercept BMS requests, modify byte 4 to 0x08\n");
 
@@ -1551,6 +1597,14 @@ void loop()
   readCANMessages();  // Handles both gateway and balancing (via intercept)
   updateBalancing();
 
+  // Debug: Print MCP2515 statistics periodically
+  static uint32_t lastMCPDebug = 0;
+  if (canDebugMcp2515Enabled && millis() - lastMCPDebug > 5000) // Every 5 seconds
+  {
+    lastMCPDebug = millis();
+    printMCP2515Stats();
+  }
+
   // Broadcast data to WebSocket clients - ONLY if clients are connected
   static uint32_t lastBroadcast = 0;
   if (ws.count() > 0 && millis() - lastBroadcast > 30000) // Only every 30 seconds
@@ -1575,8 +1629,6 @@ void loop()
                   (highestV - lowestV) * 1000.0f);
   }
 
-  // Short delay to keep up with BMS 20ms timing while giving WiFi time
-  yield();
-  delay(1); // 1ms delay - fast enough for BMS intercept
+  // Minimal delay - maximize CAN throughput
   yield();
 }
