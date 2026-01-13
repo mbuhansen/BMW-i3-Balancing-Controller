@@ -25,10 +25,10 @@
 
 // Pin definitions - LilyGO T-2CAN with dual CAN controllers
 #ifndef CAN_TX_PIN
-  #define CAN_TX_PIN GPIO_NUM_7
+#define CAN_TX_PIN GPIO_NUM_7
 #endif
 #ifndef CAN_RX_PIN
-  #define CAN_RX_PIN GPIO_NUM_6
+#define CAN_RX_PIN GPIO_NUM_6
 #endif
 #define CAN_SE_PIN GPIO_NUM_NC // No standby pin on T-2CAN
 
@@ -59,11 +59,11 @@ struct BMWModule
 // Global variables
 BMWModule modules[MAX_MODULES];
 bool balancingActive = false;
-bool manualMode = true; // Start in MANUAL mode - gateway mode, no automatic balancing
+bool manualMode = true;  // Start in MANUAL mode - gateway mode, no automatic balancing
 bool gatewayMode = true; // GATEWAY: Forward messages between BMS and slave modules
 bool externalMasterDetected = false;
-bool canDebugTwaiEnabled = true;     // TWAI (BMS) debug logging - ENABLED
-bool canDebugMcp2515Enabled = true; // MCP2515 (slave modules) debug logging - ENABLED
+bool canDebugTwaiEnabled = false;   // TWAI (BMS) debug logging - DISABLED by default
+bool canDebugMcp2515Enabled = false; // MCP2515 (slave modules) debug logging - DISABLED by default
 float targetBalanceVoltage = 4.0f;
 uint8_t messageCounter = 0;
 uint8_t nextMessage = 0;
@@ -333,11 +333,11 @@ void readCANMessages()
       temp_msg.data_length_code = mcp_len;
       memcpy(temp_msg.data, mcp_data, mcp_len);
       parseModuleMessage(temp_msg);
-      
-      // Only forward specific responses back to BMS (0x100-0x10F = direct module responses)
-      // Filter out other module messages (0x1C0-0x1FF = status/diagnostic messages)
-      bool shouldForward = (mcp_id >= 0x100 && mcp_id <= 0x10F);
-      
+
+      // Forward ALL module responses to BMS (0x100-0x1FF)
+      // Includes status, cell data, temperatures, and diagnostics
+      bool shouldForward = (mcp_id >= 0x100 && mcp_id <= 0x1FF);
+
       if (shouldForward)
       {
         // Forward slave module response back to BMS via TWAI
@@ -348,8 +348,20 @@ void readCANMessages()
         forward_msg.extd = 0;
         forward_msg.rtr = 0;
         memcpy(forward_msg.data, mcp_data, mcp_len);
-        
-        twai_transmit(&forward_msg, pdMS_TO_TICKS(10));
+
+        esp_err_t result = twai_transmit(&forward_msg, pdMS_TO_TICKS(10));
+
+        // Debug output for forwarding (throttled)
+        if (canDebugTwaiEnabled)
+        {
+          static uint32_t lastTwaiTxDebug = 0;
+          if (millis() - lastTwaiTxDebug > 200) // Only every 200ms
+          {
+            lastTwaiTxDebug = millis();
+            Serial.printf("[TWAI TX] 0x%03X [%d] %s\n", mcp_id, mcp_len,
+                          result == ESP_OK ? "OK" : "FAIL");
+          }
+        }
       }
     }
   }
@@ -358,7 +370,7 @@ void readCANMessages()
   // BMS sends requests (0x080-0x08F) to slave modules
   twai_message_t twai_msg;
   int twai_msg_count = 0;
-  
+
   while (twai_receive(&twai_msg, 0) == ESP_OK && twai_msg_count++ < 10)
   {
     uint32_t id = twai_msg.identifier;
@@ -367,7 +379,7 @@ void readCANMessages()
     if (canDebugTwaiEnabled)
     {
       static uint32_t lastTwaiDebug = 0;
-      if (millis() - lastTwaiDebug > 200)  // Only every 200ms
+      if (millis() - lastTwaiDebug > 200) // Only every 200ms
       {
         lastTwaiDebug = millis();
         Serial.printf("[TWAI RX] 0x%03X [%d] ", id, twai_msg.data_length_code);
@@ -386,11 +398,11 @@ void readCANMessages()
       // Modify byte 4 if balancing is active
       uint8_t send_data[8];
       memcpy(send_data, twai_msg.data, twai_msg.data_length_code);
-      
+
       if (balancingActive && twai_msg.data_length_code >= 8)
       {
-        send_data[4] = 0x08;  // Enable balancing
-        
+        send_data[4] = 0x08; // Enable balancing
+
         // Recalculate CRC (byte 7)
         uint8_t msgId = id & 0x0F;
         twai_message_t temp_msg;
@@ -399,24 +411,27 @@ void readCANMessages()
         memcpy(temp_msg.data, send_data, 8);
         send_data[7] = calculateChecksum(temp_msg, msgId);
       }
-      
+
       // Try to send, but don't block if buffer is full
       bool sent = sendCAN2(id, twai_msg.data_length_code, send_data);
-      
+
       // If send failed, read any pending RX to clear space
       if (!sent)
       {
         static uint32_t lastDropWarning = 0;
         static uint32_t failCount = 0;
-        
+
         // Try to read pending RX messages to free TX buffer
-        if (canReadCAN2()) {
+        if (canReadCAN2())
+        {
           uint32_t mcp_id;
           uint8_t mcp_len;
           uint8_t mcp_data[8];
-          while (readCAN2(mcp_id, mcp_len, mcp_data)) {
-            // Forward any responses to BMS
-            if (mcp_id >= 0x100 && mcp_id <= 0x10F) {
+          while (readCAN2(mcp_id, mcp_len, mcp_data))
+          {
+            // Forward ALL module responses to BMS (0x100-0x1FF)
+            if (mcp_id >= 0x100 && mcp_id <= 0x1FF)
+            {
               twai_message_t forward_msg;
               forward_msg.identifier = mcp_id;
               forward_msg.data_length_code = mcp_len;
@@ -428,7 +443,7 @@ void readCANMessages()
             }
           }
         }
-        
+
         failCount++;
         if (millis() - lastDropWarning > 1000)
         {
@@ -1594,7 +1609,7 @@ void loop()
   }
 
   // CAN processing (critical path)
-  readCANMessages();  // Handles both gateway and balancing (via intercept)
+  readCANMessages(); // Handles both gateway and balancing (via intercept)
   updateBalancing();
 
   // Debug: Print MCP2515 statistics periodically
