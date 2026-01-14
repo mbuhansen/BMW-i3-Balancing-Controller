@@ -369,7 +369,11 @@ void readCANMessages()
           // Check if bit 4 or 5 are set (non-zero)
           if (forward_msg.data[4] & 0x30) // 0x30 = 00110000 (bit 4 and 5)
           {
+            uint8_t originalByte4 = forward_msg.data[4];
             forward_msg.data[4] &= 0xCF; // Clear bit 4 and 5 (0xCF = 11001111)
+            
+            Serial.printf("[MASK] 0x%03X byte 4: 0x%02X -> 0x%02X (balance status masked)\n", 
+                         mcp_id, originalByte4, forward_msg.data[4]);
             
             // Recalculate CRC after masking
             uint8_t msgId = (mcp_id >> 4) & 0x0F;
