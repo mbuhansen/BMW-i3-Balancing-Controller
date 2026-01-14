@@ -357,6 +357,24 @@ void readCANMessages()
           forward_msg.data[1] &= 0x7F; // Cell 1 high byte - clear bit 7
           forward_msg.data[3] &= 0x7F; // Cell 2 high byte - clear bit 7
           forward_msg.data[5] &= 0x7F; // Cell 3 high byte - clear bit 7
+          
+          // Recalculate CRC after masking
+          uint8_t msgId = (mcp_id >> 4) & 0x0F;
+          forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg, msgId);
+        }
+        
+        // Mask balance status in 0x10X messages (bit 4 and 5 in byte 4)
+        if (mcp_id >= 0x100 && mcp_id <= 0x10F && mcp_len >= 5)
+        {
+          // Check if bit 4 or 5 are set (non-zero)
+          if (forward_msg.data[4] & 0x30) // 0x30 = 00110000 (bit 4 and 5)
+          {
+            forward_msg.data[4] &= 0xCF; // Clear bit 4 and 5 (0xCF = 11001111)
+            
+            // Recalculate CRC after masking
+            uint8_t msgId = (mcp_id >> 4) & 0x0F;
+            forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg, msgId);
+          }
         }
 
         esp_err_t result = twai_transmit(&forward_msg, pdMS_TO_TICKS(10));
