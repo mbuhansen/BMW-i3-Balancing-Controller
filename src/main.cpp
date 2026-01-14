@@ -348,19 +348,28 @@ void readCANMessages()
         forward_msg.extd = 0;
         forward_msg.rtr = 0;
         memcpy(forward_msg.data, mcp_data, mcp_len);
+        
+        // BMW slave modules set bit 7 in voltage bytes when balancing is active
+        // BMS expects this bit clear, so mask it out for cell voltage messages (0x120-0x157)
+        // NOTE: Do NOT mask 0x160-0x177 (balance status, temperatures, diagnostics)
+        if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6)
+        {
+          forward_msg.data[1] &= 0x7F; // Cell 1 high byte - clear bit 7
+          forward_msg.data[3] &= 0x7F; // Cell 2 high byte - clear bit 7
+          forward_msg.data[5] &= 0x7F; // Cell 3 high byte - clear bit 7
+        }
 
         esp_err_t result = twai_transmit(&forward_msg, pdMS_TO_TICKS(10));
 
-        // Debug output for forwarding (throttled)
+        // Debug output for forwarding
         if (canDebugTwaiEnabled)
         {
-          static uint32_t lastTwaiTxDebug = 0;
-          if (millis() - lastTwaiTxDebug > 200) // Only every 200ms
+          Serial.printf("[TWAI    TX] 0x%03X [%d] ", forward_msg.identifier, forward_msg.data_length_code);
+          for (int i = 0; i < forward_msg.data_length_code; i++)
           {
-            lastTwaiTxDebug = millis();
-            Serial.printf("[TWAI TX] 0x%03X [%d] %s\n", mcp_id, mcp_len,
-                          result == ESP_OK ? "OK" : "FAIL");
+            Serial.printf("%02X ", forward_msg.data[i]);
           }
+          Serial.printf("%s\n", result == ESP_OK ? "OK" : "FAIL");
         }
       }
     }
@@ -1130,7 +1139,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         
         <div class="controls">
             <button onclick="sendCommand('start')">▶ Start Balancing</button>
-            <button class="stop" onclick="sendCommand('stop')">⏹ Stop</button>
+            <button class="stop" onclick="sendCommand('stop')">⏹ Stop / Gateway</button>
             <button class="auto" onclick="sendCommand('auto')">🔄 Auto Mode</button>
         </div>
         
