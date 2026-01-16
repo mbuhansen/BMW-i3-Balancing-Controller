@@ -377,6 +377,7 @@ void readCANMessages()
         //}
         
         // Mask balance status in 0x10X messages (bit 4 and 5 in byte 4)
+        /*
         if (mcp_id >= 0x100 && mcp_id <= 0x10F && mcp_len >= 5)
         {
           // Check if bit 4 or 5 are set (non-zero)
@@ -393,6 +394,29 @@ void readCANMessages()
             forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg, msgId);
           }
         }
+        */
+        
+        // Mask balance status in 0x16X messages (byte 2-5 contain balance data)
+        // Clear balance data so BMS doesn't see that modules are balancing
+        /*
+        if (mcp_id >= 0x160 && mcp_id <= 0x167 && mcp_len >= 6)
+        {
+          // Check if any balance data is present
+          if (forward_msg.data[2] != 0 || forward_msg.data[3] != 0 || forward_msg.data[4] != 0 || forward_msg.data[5] != 0)
+          {
+            Serial.printf("[MASK] 0x%03X - clearing balance data (bytes 2-5)\n", mcp_id);
+            
+            forward_msg.data[2] = 0;
+            forward_msg.data[3] = 0;
+            forward_msg.data[4] = 0;
+            forward_msg.data[5] = 0;
+            
+            // Recalculate CRC after masking
+            uint8_t msgId = mcp_id & 0x0F;
+            forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg, msgId);
+          }
+        }
+        */
 
         esp_err_t result = twai_transmit(&forward_msg, pdMS_TO_TICKS(10));
 
