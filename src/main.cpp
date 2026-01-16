@@ -246,7 +246,16 @@ void parseModuleMessage(const twai_message_t &msg)
   case 0:
     // Error and balance status (0x10X)
     module.errorCode = msg.data[0] | (msg.data[1] << 8) | (msg.data[2] << 16) | (msg.data[3] << 24);
+    
+    uint16_t oldBalanceStatus = module.balanceStatus;
     module.balanceStatus = ((msg.data[5] & 0x0F) << 8) | msg.data[4];
+    
+    // Print when balance status changes (0x10X byte 4-5)
+    if (module.balanceStatus != oldBalanceStatus)
+    {
+      Serial.printf("[0x10X BALSTAT] Module %d: 0x%03X -> 0x%03X (byte 4-5: %02X %02X)\n", 
+                    moduleId, oldBalanceStatus, module.balanceStatus, msg.data[4], msg.data[5]);
+    }
     break;
 
   case 2:
@@ -789,7 +798,7 @@ void performBroadcast()
 
     JsonObject moduleObj = modulesArray.add<JsonObject>();
     moduleObj["id"] = m + 1;
-    moduleObj["balancing"] = (modules[m].balanceStatus != 0);
+    moduleObj["balancing"] = (modules[m].balanceStatus != 0);  // Use balanceStatus from 0x10X byte 4-5 (same as SimpleBMS)
     moduleObj["error"] = modules[m].errorCode;
 
     JsonArray cellsArray = moduleObj["cells"].to<JsonArray>();
