@@ -351,17 +351,30 @@ void readCANMessages()
         
         // BMW slave modules set bit 7 in voltage bytes when balancing is active
         // BMS expects this bit clear, so mask it out for cell voltage messages (0x120-0x157)
+        // NOTE: Byte 6 is a counter and must NOT be modified
         // NOTE: Do NOT mask 0x160-0x177 (balance status, temperatures, diagnostics)
-        if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6)
-        {
-          forward_msg.data[1] &= 0x7F; // Cell 1 high byte - clear bit 7
-          forward_msg.data[3] &= 0x7F; // Cell 2 high byte - clear bit 7
-          forward_msg.data[5] &= 0x7F; // Cell 3 high byte - clear bit 7
+        //if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6)
+        //{
+         // Check if any bit 7 is set before masking
+        //  bool needsRecalc = (forward_msg.data[1] & 0x80) || (forward_msg.data[3] & 0x80) || (forward_msg.data[5] & 0x80);
           
-          // Recalculate CRC after masking
-          uint8_t msgId = (mcp_id >> 4) & 0x0F;
-          forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg, msgId);
-        }
+        // forward_msg.data[1] &= 0x7F; // Cell 1 high byte - clear bit 7
+        //  forward_msg.data[3] &= 0x7F; // Cell 2 high byte - clear bit 7
+        //  forward_msg.data[5] &= 0x7F; // Cell 3 high byte - clear bit 7
+          // Byte 6 (counter) is NOT modified
+          
+          // Only recalculate CRC if we actually changed the data
+        //  if (needsRecalc)
+        //  {
+        //    uint8_t msgId = mcp_id & 0x0F;
+        //    forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg, msgId);
+            
+        //    if (canDebugTwaiEnabled)
+        //    {
+        //      Serial.printf("[MASK] 0x%03X - cleared bit 7 from voltage bytes\n", mcp_id);
+        //    }
+        //  }
+        //}
         
         // Mask balance status in 0x10X messages (bit 4 and 5 in byte 4)
         if (mcp_id >= 0x100 && mcp_id <= 0x10F && mcp_len >= 5)
@@ -376,7 +389,7 @@ void readCANMessages()
                          mcp_id, originalByte4, forward_msg.data[4]);
             
             // Recalculate CRC after masking
-            uint8_t msgId = (mcp_id >> 4) & 0x0F;
+            uint8_t msgId = mcp_id & 0x0F;
             forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg, msgId);
           }
         }
