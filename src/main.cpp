@@ -40,7 +40,11 @@
 #define BALANCE_HYSTERESIS_MV 5    // Stop balancing when within 5mV
 #define CAN_COMMAND_INTERVAL_MS 20 // Send commands every 20ms (match BMS rate)
 
-// BMW CRC8 Lookup table and finalxor values (Derived from log analysis 2026-01-17)
+// BMW CRC8 finalxor values for COMMAND messages (0x080-0x08F)
+// Original values from SimpleBMS - used when modifying BMS commands
+const uint8_t finalxor[12] = {0xCF, 0xF5, 0xBB, 0x81, 0x27, 0x1D, 0x53, 0x69, 0x02, 0x38, 0x76, 0x4C};
+
+// BMW CRC8 Lookup table and finalxor values for RESPONSE messages (Derived from log analysis 2026-01-17)
 // Rows: Message Type (0-7), Columns: Module ID (0-7)
 // 0x10X: Status
 // 0x11X: Control/Debug (Unknown, unused)
@@ -129,8 +133,8 @@ public:
 
 CRC8 crc8;
 
-// Calculate checksum for CAN message
-// Now automatically determines finalXor from Message Type and Module ID
+// Calculate checksum for CAN message (Response messages 0x100-0x1FF)
+// Uses finalxor_table for response messages
 uint8_t calculateChecksum(const twai_message_t &msg)
 {
   uint8_t canmes[11];
@@ -148,6 +152,24 @@ uint8_t calculateChecksum(const twai_message_t &msg)
   uint8_t moduleId = msg.identifier & 0x07;       // Extract Module (0-7)
 
   return crc8.get_crc8(canmes, meslen, finalxor_table[msgType][moduleId]);
+}
+
+// Calculate checksum for COMMAND messages (0x080-0x08F)
+// Uses the original finalxor array from SimpleBMS
+uint8_t calculateChecksum_Command(const twai_message_t &msg, uint8_t msgId)
+{
+  uint8_t canmes[11];
+  int meslen = msg.data_length_code + 1;
+
+  canmes[0] = msg.identifier >> 8;
+  canmes[1] = msg.identifier & 0xFF;
+
+  for (int i = 0; i < (msg.data_length_code - 1); i++)
+  {
+    canmes[i + 2] = msg.data[i];
+  }
+
+  return crc8.get_crc8(canmes, meslen, finalxor[msgId]);
 }
 
 // Initialize TWAI (CAN) driver
@@ -417,31 +439,30 @@ void readCANMessages()
         // BMS expects this bit clear, so mask it out for cell voltage messages (0x120-0x157)
         // NOTE: Byte 6 is a counter and must NOT be modified
         // NOTE: Do NOT mask 0x160-0x177 (balance status, temperatures, diagnostics)
-        // if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6)
-        //{
+         if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6)
+        {
         // Check if any bit 7 is set before masking
-        //  bool needsRecalc = (forward_msg.data[1] & 0x80) || (forward_msg.data[3] & 0x80) || (forward_msg.data[5] & 0x80);
+          bool needsRecalc = (forward_msg.data[1] & 0x80) || (forward_msg.data[3] & 0x80) || (forward_msg.data[5] & 0x80);
 
-        // forward_msg.data[1] &= 0x7F; // Cell 1 high byte - clear bit 7
-        //  forward_msg.data[3] &= 0x7F; // Cell 2 high byte - clear bit 7
-        //  forward_msg.data[5] &= 0x7F; // Cell 3 high byte - clear bit 7
+         forward_msg.data[1] &= 0x7F; // Cell 1 high byte - clear bit 7
+          forward_msg.data[3] &= 0x7F; // Cell 2 high byte - clear bit 7
+          forward_msg.data[5] &= 0x7F; // Cell 3 high byte - clear bit 7
         // Byte 6 (counter) is NOT modified
 
         // Only recalculate CRC if we actually changed the data
-        //  if (needsRecalc)
-        //  {
-        //    uint8_t msgId = mcp_id & 0x0F;
-        //    forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg, msgId);
+          if (needsRecalc)
+          {
+            forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg);
 
-        //    if (canDebugTwaiEnabled)
-        //    {
-        //      Serial.printf("[MASK] 0x%03X - cleared bit 7 from voltage bytes\n", mcp_id);
-        //    }
-        //  }
-        //}
+            if (canDebugTwaiEnabled)
+            {
+              Serial.printf("[MASK] 0x%03X - cleared bit 7 from voltage bytes\n", mcp_id);
+            }
+          }
+        }
 
         // Mask balance status in 0x10X messages (bit 4 and 5 in byte 4)
-        /*
+        
         if (mcp_id >= 0x100 && mcp_id <= 0x10F && mcp_len >= 5)
         {
           // Check if bit 4 or 5 are set (non-zero)
@@ -454,11 +475,10 @@ void readCANMessages()
                          mcp_id, originalByte4, forward_msg.data[4]);
 
             // Recalculate CRC after masking
-            uint8_t msgId = mcp_id & 0x0F;
-            forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg, msgId);
+            forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg);
           }
         }
-        */
+        
 
         // Mask balance status in 0x16X messages (byte 2-5 contain balance data)
         // Clear balance data so BMS doesn't see that modules are balancing
@@ -535,13 +555,14 @@ void readCANMessages()
       {
         send_data[4] = 0x08; // Enable balancing
 
-        // Recalculate CRC (byte 7)
-        // uint8_t msgId = id & 0x0F;
+        // Recalculate CRC using the ORIGINAL method for command messages (0x080-0x08F)
+        // Uses finalxor[] array (not finalxor_table)
         twai_message_t temp_msg;
         temp_msg.identifier = id;
         temp_msg.data_length_code = twai_msg.data_length_code;
         memcpy(temp_msg.data, send_data, 8);
-        send_data[7] = calculateChecksum(temp_msg);
+        uint8_t msgId = id & 0x0F;
+        send_data[7] = calculateChecksum_Command(temp_msg, msgId);
       }
 
       // Try to send, but don't block if buffer is full
