@@ -40,8 +40,26 @@
 #define BALANCE_HYSTERESIS_MV 5    // Stop balancing when within 5mV
 #define CAN_COMMAND_INTERVAL_MS 20 // Send commands every 20ms (match BMS rate)
 
-// BMW CRC8 Lookup table and finalxor values (from SimpleBMS)
-const uint8_t finalxor[12] = {0xCF, 0xF5, 0xBB, 0x81, 0x27, 0x1D, 0x53, 0x69, 0x02, 0x38, 0x76, 0x4C};
+// BMW CRC8 Lookup table and finalxor values (Derived from log analysis 2026-01-17)
+// Rows: Message Type (0-7), Columns: Module ID (0-7)
+// 0x10X: Status
+// 0x11X: Control/Debug (Unknown, unused)
+// 0x12X: Voltage 1
+// 0x13X: Voltage 2
+// 0x14X: Voltage 3
+// 0x15X: Voltage 4
+// 0x16X: Balance Status
+// 0x17X: Temperatures (Unused/Unverified)
+const uint8_t finalxor_table[8][8] = {
+    {0xB9, 0x83, 0xCD, 0xF7, 0x51, 0x6B, 0x25, 0x1F}, // Type 0 (0x10X)
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // Type 1 (0x11X) - Unknown/Unused
+    {0xAA, 0x90, 0xDE, 0xE4, 0x42, 0x78, 0x36, 0x0C}, // Type 2 (0x12X)
+    {0x2D, 0x17, 0x59, 0x63, 0xC5, 0xFF, 0xB1, 0x8B}, // Type 3 (0x13X)
+    {0x9F, 0xA5, 0xEB, 0xD1, 0x77, 0x4D, 0x03, 0x39}, // Type 4 (0x14X)
+    {0x18, 0x22, 0x6C, 0x56, 0xF0, 0xCA, 0x84, 0xBE}, // Type 5 (0x15X)
+    {0x8C, 0xB6, 0xF8, 0xC2, 0x64, 0x5E, 0x10, 0x2A}, // Type 6 (0x16X)
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}  // Type 7 (0x17X) - Unverified
+};
 
 // Module data structure
 struct BMWModule
@@ -62,7 +80,7 @@ bool balancingActive = false;
 bool manualMode = true;  // Start in MANUAL mode - gateway mode, no automatic balancing
 bool gatewayMode = true; // GATEWAY: Forward messages between BMS and slave modules
 bool externalMasterDetected = false;
-bool canDebugTwaiEnabled = false;   // TWAI (BMS) debug logging - DISABLED by default
+bool canDebugTwaiEnabled = false;    // TWAI (BMS) debug logging - DISABLED by default
 bool canDebugMcp2515Enabled = false; // MCP2515 (slave modules) debug logging - DISABLED by default
 float targetBalanceVoltage = 4.0f;
 uint8_t messageCounter = 0;
@@ -112,7 +130,8 @@ public:
 CRC8 crc8;
 
 // Calculate checksum for CAN message
-uint8_t calculateChecksum(const twai_message_t &msg, uint8_t msgId)
+// Now automatically determines finalXor from Message Type and Module ID
+uint8_t calculateChecksum(const twai_message_t &msg)
 {
   uint8_t canmes[11];
   int meslen = msg.data_length_code + 1;
@@ -125,7 +144,10 @@ uint8_t calculateChecksum(const twai_message_t &msg, uint8_t msgId)
     canmes[i + 2] = msg.data[i];
   }
 
-  return crc8.get_crc8(canmes, meslen, finalxor[msgId]);
+  uint8_t msgType = (msg.identifier >> 4) & 0x07; // Extract Type (0-7)
+  uint8_t moduleId = msg.identifier & 0x07;       // Extract Module (0-7)
+
+  return crc8.get_crc8(canmes, meslen, finalxor_table[msgType][moduleId]);
 }
 
 // Initialize TWAI (CAN) driver
@@ -246,14 +268,14 @@ void parseModuleMessage(const twai_message_t &msg)
   case 0:
     // Error and balance status (0x10X)
     module.errorCode = msg.data[0] | (msg.data[1] << 8) | (msg.data[2] << 16) | (msg.data[3] << 24);
-    
+
     uint16_t oldBalanceStatus = module.balanceStatus;
     module.balanceStatus = ((msg.data[5] & 0x0F) << 8) | msg.data[4];
-    
+
     // Print when balance status changes (0x10X byte 4-5)
     if (module.balanceStatus != oldBalanceStatus)
     {
-      Serial.printf("[0x10X BALSTAT] Module %d: 0x%03X -> 0x%03X (byte 4-5: %02X %02X)\n", 
+      Serial.printf("[0x10X BALSTAT] Module %d: 0x%03X -> 0x%03X (byte 4-5: %02X %02X)\n",
                     moduleId, oldBalanceStatus, module.balanceStatus, msg.data[4], msg.data[5]);
     }
     break;
@@ -303,11 +325,11 @@ void parseModuleMessage(const twai_message_t &msg)
     // Byte 2-5 contain balancing data: non-zero means balancing is active
     bool wasBalancing = module.balancing;
     module.balancing = (msg.data[2] != 0 || msg.data[3] != 0 || msg.data[4] != 0 || msg.data[5] != 0);
-    
+
     // Print when balancing state changes
     if (module.balancing && !wasBalancing)
     {
-      Serial.printf("[BALANCE] Module %d started balancing (0x%03X: %02X %02X %02X %02X)\n", 
+      Serial.printf("[BALANCE] Module %d started balancing (0x%03X: %02X %02X %02X %02X)\n",
                     moduleId, id, msg.data[2], msg.data[3], msg.data[4], msg.data[5]);
     }
     else if (!module.balancing && wasBalancing)
@@ -369,34 +391,34 @@ void readCANMessages()
         forward_msg.extd = 0;
         forward_msg.rtr = 0;
         memcpy(forward_msg.data, mcp_data, mcp_len);
-        
+
         // BMW slave modules set bit 7 in voltage bytes when balancing is active
         // BMS expects this bit clear, so mask it out for cell voltage messages (0x120-0x157)
         // NOTE: Byte 6 is a counter and must NOT be modified
         // NOTE: Do NOT mask 0x160-0x177 (balance status, temperatures, diagnostics)
-        //if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6)
+        // if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6)
         //{
-         // Check if any bit 7 is set before masking
+        // Check if any bit 7 is set before masking
         //  bool needsRecalc = (forward_msg.data[1] & 0x80) || (forward_msg.data[3] & 0x80) || (forward_msg.data[5] & 0x80);
-          
+
         // forward_msg.data[1] &= 0x7F; // Cell 1 high byte - clear bit 7
         //  forward_msg.data[3] &= 0x7F; // Cell 2 high byte - clear bit 7
         //  forward_msg.data[5] &= 0x7F; // Cell 3 high byte - clear bit 7
-          // Byte 6 (counter) is NOT modified
-          
-          // Only recalculate CRC if we actually changed the data
+        // Byte 6 (counter) is NOT modified
+
+        // Only recalculate CRC if we actually changed the data
         //  if (needsRecalc)
         //  {
         //    uint8_t msgId = mcp_id & 0x0F;
         //    forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg, msgId);
-            
+
         //    if (canDebugTwaiEnabled)
         //    {
         //      Serial.printf("[MASK] 0x%03X - cleared bit 7 from voltage bytes\n", mcp_id);
         //    }
         //  }
         //}
-        
+
         // Mask balance status in 0x10X messages (bit 4 and 5 in byte 4)
         /*
         if (mcp_id >= 0x100 && mcp_id <= 0x10F && mcp_len >= 5)
@@ -406,17 +428,17 @@ void readCANMessages()
           {
             uint8_t originalByte4 = forward_msg.data[4];
             forward_msg.data[4] &= 0xCF; // Clear bit 4 and 5 (0xCF = 11001111)
-            
-            Serial.printf("[MASK] 0x%03X byte 4: 0x%02X -> 0x%02X (balance status masked)\n", 
+
+            Serial.printf("[MASK] 0x%03X byte 4: 0x%02X -> 0x%02X (balance status masked)\n",
                          mcp_id, originalByte4, forward_msg.data[4]);
-            
+
             // Recalculate CRC after masking
             uint8_t msgId = mcp_id & 0x0F;
             forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg, msgId);
           }
         }
         */
-        
+
         // Mask balance status in 0x16X messages (byte 2-5 contain balance data)
         // Clear balance data so BMS doesn't see that modules are balancing
         /*
@@ -426,12 +448,12 @@ void readCANMessages()
           if (forward_msg.data[2] != 0 || forward_msg.data[3] != 0 || forward_msg.data[4] != 0 || forward_msg.data[5] != 0)
           {
             Serial.printf("[MASK] 0x%03X - clearing balance data (bytes 2-5)\n", mcp_id);
-            
+
             forward_msg.data[2] = 0;
             forward_msg.data[3] = 0;
             forward_msg.data[4] = 0;
             forward_msg.data[5] = 0;
-            
+
             // Recalculate CRC after masking
             uint8_t msgId = mcp_id & 0x0F;
             forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg, msgId);
@@ -493,12 +515,12 @@ void readCANMessages()
         send_data[4] = 0x08; // Enable balancing
 
         // Recalculate CRC (byte 7)
-        uint8_t msgId = id & 0x0F;
+        // uint8_t msgId = id & 0x0F;
         twai_message_t temp_msg;
         temp_msg.identifier = id;
         temp_msg.data_length_code = twai_msg.data_length_code;
         memcpy(temp_msg.data, send_data, 8);
-        send_data[7] = calculateChecksum(temp_msg, msgId);
+        send_data[7] = calculateChecksum(temp_msg);
       }
 
       // Try to send, but don't block if buffer is full
@@ -798,7 +820,7 @@ void performBroadcast()
 
     JsonObject moduleObj = modulesArray.add<JsonObject>();
     moduleObj["id"] = m + 1;
-    moduleObj["balancing"] = (modules[m].balanceStatus != 0);  // Use balanceStatus from 0x10X byte 4-5 (same as SimpleBMS)
+    moduleObj["balancing"] = (modules[m].balanceStatus != 0); // Use balanceStatus from 0x10X byte 4-5 (same as SimpleBMS)
     moduleObj["error"] = modules[m].errorCode;
 
     JsonArray cellsArray = moduleObj["cells"].to<JsonArray>();
