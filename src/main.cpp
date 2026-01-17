@@ -266,6 +266,7 @@ void parseModuleMessage(const twai_message_t &msg)
   switch (typeId)
   {
   case 0:
+  {
     // Error and balance status (0x10X)
     module.errorCode = msg.data[0] | (msg.data[1] << 8) | (msg.data[2] << 16) | (msg.data[3] << 24);
 
@@ -279,6 +280,7 @@ void parseModuleMessage(const twai_message_t &msg)
                     moduleId, oldBalanceStatus, module.balanceStatus, msg.data[4], msg.data[5]);
     }
     break;
+  }
 
   case 2:
     // Cells 0-2 (0x12X)
@@ -321,6 +323,7 @@ void parseModuleMessage(const twai_message_t &msg)
     break;
 
   case 6:
+  {
     // Balancing status (0x16X)
     // Byte 2-5 contain balancing data: non-zero means balancing is active
     bool wasBalancing = module.balancing;
@@ -337,6 +340,7 @@ void parseModuleMessage(const twai_message_t &msg)
       Serial.printf("[BALANCE] Module %d stopped balancing\n", moduleId);
     }
     break;
+  }
 
   case 7:
     // Temperatures (0x17X)
