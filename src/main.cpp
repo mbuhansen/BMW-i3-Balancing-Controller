@@ -35,10 +35,12 @@
 // Configuration
 #define MAX_MODULES 8
 #define CELLS_PER_MODULE 12
-#define MIN_BALANCE_VOLTAGE 3.99f   // Minimum voltage to start balancing (V)
-#define BALANCE_THRESHOLD_MV 10    // Start balancing if cells differ by more than 10mV
-#define BALANCE_HYSTERESIS_MV 5    // Stop balancing when within 5mV
 #define CAN_COMMAND_INTERVAL_MS 20 // Send commands every 20ms (match BMS rate)
+
+// Balancing configuration (runtime adjustable)
+float minBalanceVoltage = 3.99f;  // Minimum voltage to start balancing (V)
+float balanceThresholdMv = 10.0f; // Start balancing if cells differ by more than this (mV)
+float balanceHysteresisMv = 5.0f; // Stop balancing when within this (mV)
 
 // BMW CRC8 finalxor values for COMMAND messages (0x080-0x08F)
 // Original values from SimpleBMS - used when modifying BMS commands
@@ -719,20 +721,20 @@ void updateBalancing()
   float difference_mV = (highestVoltage - lowestVoltage) * 1000.0f;
 
   // Only start balancing if highest cell is above minimum voltage
-  if (!balancingActive && difference_mV > BALANCE_THRESHOLD_MV && highestVoltage > MIN_BALANCE_VOLTAGE)
+  if (!balancingActive && difference_mV > balanceThresholdMv && highestVoltage > minBalanceVoltage)
   {
     // Start balancing
     balancingActive = true;
     Serial.printf("Starting balancing: Lowest=%.3fV, Highest=%.3fV, Diff=%.1fmV\n",
                   lowestVoltage, highestVoltage, difference_mV);
   }
-  else if (balancingActive && difference_mV < BALANCE_HYSTERESIS_MV)
+  else if (balancingActive && difference_mV < balanceHysteresisMv)
   {
     // Stop balancing
     balancingActive = false;
     Serial.printf("Stopping balancing: Cells balanced within %.1fmV\n", difference_mV);
   }
-  else if (balancingActive && highestVoltage < MIN_BALANCE_VOLTAGE)
+  else if (balancingActive && highestVoltage < minBalanceVoltage)
   {
     // Stop balancing if voltage drops too low
     balancingActive = false;
@@ -799,6 +801,24 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         {
           canDebugMcp2515Enabled = !canDebugMcp2515Enabled;
           Serial.printf("MCP2515 debug logging %s\n", canDebugMcp2515Enabled ? "enabled" : "disabled");
+        }
+        else if (strcmp(command, "updateSettings") == 0)
+        {
+          if (doc["minBalanceVoltage"].is<float>())
+          {
+            minBalanceVoltage = doc["minBalanceVoltage"];
+            Serial.printf("Min balance voltage set to %.2fV\n", minBalanceVoltage);
+          }
+          if (doc["balanceThreshold"].is<float>())
+          {
+            balanceThresholdMv = doc["balanceThreshold"];
+            Serial.printf("Balance threshold set to %.0fmV\n", balanceThresholdMv);
+          }
+          if (doc["balanceHysteresis"].is<float>())
+          {
+            balanceHysteresisMv = doc["balanceHysteresis"];
+            Serial.printf("Balance hysteresis set to %.0fmV\n", balanceHysteresisMv);
+          }
         }
         else if (strcmp(command, "setThreshold") == 0)
         {
@@ -884,6 +904,11 @@ void performBroadcast()
   doc["gatewayMode"] = gatewayMode;
   doc["externalMaster"] = externalMasterDetected && (millis() - lastExternalCommandTime < 60000);
   doc["uptime"] = millis() / 1000;
+
+  // Send current settings
+  doc["minBalanceVoltage"] = minBalanceVoltage;
+  doc["balanceThresholdMv"] = balanceThresholdMv;
+  doc["balanceHysteresisMv"] = balanceHysteresisMv;
 
   JsonArray modulesArray = doc["modules"].to<JsonArray>();
 
@@ -1168,14 +1193,101 @@ const char index_html[] PROGMEM = R"rawliteral(
             background: rgba(239, 68, 68, 0.3);
             color: #ef4444;
         }
+        .settings-section {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .settings-toggle-btn {
+            background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+            border: none;
+            padding: 12px 24px;
+            border-radius: 10px;
+            color: white;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+        }
+        .settings-toggle-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(139, 92, 246, 0.4);
+        }
+        .settings-toggle-btn .arrow {
+            transition: transform 0.3s ease;
+            font-size: 0.8em;
+        }
+        .settings-toggle-btn.open .arrow {
+            transform: rotate(180deg);
+        }
+        .settings-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+        }
+        .settings-content.open {
+            max-height: 800px;
+            margin-top: 20px;
+        }
+        .settings-title {
+            text-align: center;
+            font-size: 1.3em;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: #60a5fa;
+        }
+        .settings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .setting-item {
+            background: rgba(0,0,0,0.3);
+            padding: 15px;
+            border-radius: 10px;
+        }
+        .setting-label {
+            font-size: 0.9em;
+            opacity: 0.8;
+            margin-bottom: 8px;
+        }
+        .setting-input-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .setting-input-group input {
+            flex: 1;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            padding: 10px;
+            color: white;
+            font-size: 1em;
+        }
+        .setting-input-group span {
+            font-size: 0.9em;
+            opacity: 0.7;
+        }
+        .settings-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
         .debug-button {
             position: fixed;
             bottom: 20px;
             right: 20px;
             z-index: 1000;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
+            display: none; /* Hidden - moved to settings section */
         }
         .debug-button button {
             background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
@@ -1271,15 +1383,11 @@ const char index_html[] PROGMEM = R"rawliteral(
 </head>
 <body>
     <div class="top-right-buttons">
-        <input type="file" id="otaFile" accept=".bin" onchange="uploadOTA()">
-        <button class="ota" onclick="document.getElementById('otaFile').click()">⬆️ OTA Update</button>
-        <button class="restart" onclick="restartDevice()">🔄 Restart</button>
         <div class="connection-status" id="connectionStatus">Connecting...</div>
     </div>
     
     <div class="debug-button">
-        <button id="debugBtnTwai" onclick="toggleDebugTwai()">🐛 TWAI Debug: OFF</button>
-        <button id="debugBtnMcp" onclick="toggleDebugMcp2515()">🐛 MCP2515 Debug: OFF</button>
+        <!-- Moved to settings section -->
     </div>
     
     <div class="container">
@@ -1356,6 +1464,50 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
             <div class="chart-info" id="chartInfo">Hover over bars to see details</div>
         </div>
+        
+        <div class="settings-section">
+            <div class="settings-buttons">
+                <button id="debugBtnTwai" onclick="toggleDebugTwai()">🐛 TWAI Debug: OFF</button>
+                <button id="debugBtnMcp" onclick="toggleDebugMcp2515()">🐛 MCP2515 Debug: OFF</button>
+                <input type="file" id="otaFile" accept=".bin" onchange="uploadOTA()" style="display:none;">
+                <button class="ota" onclick="document.getElementById('otaFile').click()">⬆️ OTA Update</button>
+                <button class="restart" onclick="restartDevice()">🔄 Restart</button>
+                <button class="settings-toggle-btn" onclick="toggleSettings()">
+                    <span>⚙️ Settings</span>
+                    <span class="arrow">▼</span>
+                </button>
+            </div>
+            
+            <div class="settings-content" id="settingsContent">
+                <div class="settings-grid">
+                    <div class="setting-item">
+                        <div class="setting-label">Min Balance Voltage</div>
+                        <div class="setting-input-group">
+                            <input type="number" id="minBalanceVoltage" step="0.01" min="3.5" max="4.3" value="3.99">
+                            <span>V</span>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-label">Balance Threshold</div>
+                        <div class="setting-input-group">
+                            <input type="number" id="balanceThreshold" step="1" min="1" max="50" value="10">
+                            <span>mV</span>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-label">Balance Hysteresis</div>
+                        <div class="setting-input-group">
+                            <input type="number" id="balanceHysteresis" step="1" min="1" max="20" value="5">
+                            <span>mV</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="display: flex; justify-content: center; margin-top: 15px;">
+                    <button onclick="updateSettings()">💾 Save Settings</button>
+                </div>
+            </div>
+        </div>
     </div>
     
     <script>
@@ -1391,6 +1543,17 @@ const char index_html[] PROGMEM = R"rawliteral(
             statusElement.className = 'stat-value';
             if (data.status === 'BALANCING') statusElement.className += ' good';
             else if (data.status === 'GATEWAY') statusElement.className += ' warning';
+            
+            // Update settings inputs (only if not currently focused)
+            if (document.activeElement.id !== 'minBalanceVoltage' && data.minBalanceVoltage) {
+                document.getElementById('minBalanceVoltage').value = data.minBalanceVoltage.toFixed(2);
+            }
+            if (document.activeElement.id !== 'balanceThreshold' && data.balanceThresholdMv) {
+                document.getElementById('balanceThreshold').value = data.balanceThresholdMv.toFixed(0);
+            }
+            if (document.activeElement.id !== 'balanceHysteresis' && data.balanceHysteresisMv) {
+                document.getElementById('balanceHysteresis').value = data.balanceHysteresisMv.toFixed(0);
+            }
             
             // Update LED indicator
             const statusLed = document.getElementById('statusLed');
@@ -1612,6 +1775,37 @@ const char index_html[] PROGMEM = R"rawliteral(
                 document.getElementById('connectionStatus').textContent = 'Restarting...';
                 document.getElementById('connectionStatus').className = 'connection-status disconnected';
             }
+        }
+        
+        function updateSettings() {
+            const minBalanceVoltage = parseFloat(document.getElementById('minBalanceVoltage').value);
+            const balanceThreshold = parseFloat(document.getElementById('balanceThreshold').value);
+            const balanceHysteresis = parseFloat(document.getElementById('balanceHysteresis').value);
+            
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    command: 'updateSettings',
+                    minBalanceVoltage: minBalanceVoltage,
+                    balanceThreshold: balanceThreshold,
+                    balanceHysteresis: balanceHysteresis
+                }));
+                
+                // Visual feedback
+                const btn = event.target;
+                const originalText = btn.textContent;
+                btn.textContent = '✓ Saved!';
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                }, 1500);
+            }
+        }
+        
+        function toggleSettings() {
+            const content = document.getElementById('settingsContent');
+            const btn = event.target.closest('.settings-toggle-btn');
+            
+            content.classList.toggle('open');
+            btn.classList.toggle('open');
         }
         
         let canDebugTwaiEnabled = false;
