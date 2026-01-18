@@ -87,7 +87,7 @@ bool externalMasterDetected = false;
 bool canDebugTwaiEnabled = false;    // TWAI (BMS) debug logging - DISABLED by default
 bool canDebugMcp2515Enabled = false; // MCP2515 (slave modules) debug logging - DISABLED by default
 float targetBalanceVoltage = 4.0f;
-float bmsTargetVoltage = 0.0f;       // Target voltage from BMS 0x08X messages
+float bmsTargetVoltage = 0.0f; // Target voltage from BMS 0x08X messages
 uint8_t messageCounter = 0;
 uint8_t nextMessage = 0;
 uint32_t lastCommandTime = 0;
@@ -227,6 +227,46 @@ void printCANMessage(const twai_message_t &msg, bool isTX)
     Serial.printf("%02X ", msg.data[i]);
   }
   Serial.println();
+}
+
+// Send 0x11X messages to BMS during balancing
+// Slave modules stop sending these when balancing is active
+// Sends all 0x11X in a burst (not individually spaced)
+void send0x11MessagesBurst()
+{
+  // Send 0x11X for all active modules in one burst
+  for (int m = 0; m < MAX_MODULES; m++)
+  {
+    if (!modules[m].exists)
+      continue;
+
+    // Create 0x11X message (module diagnostic/status)
+    twai_message_t msg;
+    msg.identifier = 0x110 + m;
+    msg.data_length_code = 8;
+    msg.flags = TWAI_MSG_FLAG_NONE;
+    msg.extd = 0;
+    msg.rtr = 0;
+
+    // Standard 0x11X payload: 11 00 00 00 00 00 00 00
+    // No CRC on 0x11X messages - last bytes are always 00 00
+    msg.data[0] = 0x11;
+    msg.data[1] = 0x00;
+    msg.data[2] = 0x00;
+    msg.data[3] = 0x00;
+    msg.data[4] = 0x00;
+    msg.data[5] = 0x00;
+    msg.data[6] = 0x00;
+    msg.data[7] = 0x00;
+
+    // Send to BMS via TWAI
+    esp_err_t result = twai_transmit(&msg, pdMS_TO_TICKS(5));
+
+    if (canDebugTwaiEnabled && result == ESP_OK)
+    {
+      Serial.printf("[SYNTH 0x11X] Module %d -> BMS\n", m);
+    }
+  }
 }
 
 // Parse incoming CAN messages from slave modules
@@ -581,7 +621,7 @@ void readCANMessages()
         uint16_t rawVoltage = twai_msg.data[0] | (twai_msg.data[1] << 8);
         bmsTargetVoltage = rawVoltage / 1000.0f; // Convert to volts
       }
-      
+
       // Forward BMS requests to slave modules via MCP2515
       // Modify byte 4 if balancing is active
       uint8_t send_data[8];
@@ -641,46 +681,6 @@ void readCANMessages()
           lastDropWarning = millis();
         }
       }
-    }
-  }
-}
-
-// Send 0x11X messages to BMS during balancing
-// Slave modules stop sending these when balancing is active
-// Sends all 0x11X in a burst (not individually spaced)
-void send0x11MessagesBurst()
-{
-  // Send 0x11X for all active modules in one burst
-  for (int m = 0; m < MAX_MODULES; m++)
-  {
-    if (!modules[m].exists)
-      continue;
-
-    // Create 0x11X message (module diagnostic/status)
-    twai_message_t msg;
-    msg.identifier = 0x110 + m;
-    msg.data_length_code = 8;
-    msg.flags = TWAI_MSG_FLAG_NONE;
-    msg.extd = 0;
-    msg.rtr = 0;
-
-    // Standard 0x11X payload: 11 00 00 00 00 00 00 00
-    // No CRC on 0x11X messages - last bytes are always 00 00
-    msg.data[0] = 0x11;
-    msg.data[1] = 0x00;
-    msg.data[2] = 0x00;
-    msg.data[3] = 0x00;
-    msg.data[4] = 0x00;
-    msg.data[5] = 0x00;
-    msg.data[6] = 0x00;
-    msg.data[7] = 0x00;
-
-    // Send to BMS via TWAI
-    esp_err_t result = twai_transmit(&msg, pdMS_TO_TICKS(5));
-
-    if (canDebugTwaiEnabled && result == ESP_OK)
-    {
-      Serial.printf("[SYNTH 0x11X] Module %d -> BMS\n", m);
     }
   }
 }
