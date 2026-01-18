@@ -88,6 +88,7 @@ bool canDebugTwaiEnabled = false;    // TWAI (BMS) debug logging - DISABLED by d
 bool canDebugMcp2515Enabled = false; // MCP2515 (slave modules) debug logging - DISABLED by default
 float targetBalanceVoltage = 4.0f;
 float bmsTargetVoltage = 0.0f; // Target voltage from BMS 0x08X messages
+float activeTargetVoltage = 0.0f; // Actual target voltage sent to modules (overridden during balancing)
 uint8_t messageCounter = 0;
 uint8_t nextMessage = 0;
 uint32_t lastCommandTime = 0;
@@ -96,6 +97,10 @@ uint32_t lastDataUpdate = 0;
 
 // Single-core mode - all tasks run on Core 1 (WiFi core)
 // No mutex needed - everything runs on same core
+
+// Forward declarations
+float getLowestCellVoltage();
+float getHighestCellVoltage();
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
@@ -620,6 +625,7 @@ void readCANMessages()
       {
         uint16_t rawVoltage = twai_msg.data[0] | (twai_msg.data[1] << 8);
         bmsTargetVoltage = rawVoltage / 1000.0f; // Convert to volts
+        activeTargetVoltage = bmsTargetVoltage; // Default: use BMS target
       }
 
       // Forward BMS requests to slave modules via MCP2515
@@ -630,6 +636,28 @@ void readCANMessages()
       if (balancingActive && twai_msg.data_length_code >= 8)
       {
         send_data[4] = 0x08; // Enable balancing
+
+        // Set target voltage to lowest cell + 2mV
+        // BMS gets wrong cell values during balancing, so we override the target
+        float lowestCell = getLowestCellVoltage();
+        if (lowestCell > 0.5f) // Valid cell voltage
+        {
+          float targetV = lowestCell + 0.002f; // Add 2mV
+          uint16_t targetMV = (uint16_t)(targetV * 1000.0f);
+          uint16_t originalTargetMV = twai_msg.data[0] | (twai_msg.data[1] << 8);
+          send_data[0] = targetMV & 0xFF;        // Low byte
+          send_data[1] = (targetMV >> 8) & 0xFF; // High byte
+          activeTargetVoltage = targetV; // Update active target for web UI
+          
+          // Log target voltage override (only when it changes)
+          static uint16_t lastLoggedTarget = 0;
+          if (targetMV != lastLoggedTarget)
+          {
+            Serial.printf("⚡ Balancing target override: BMS=%.3fV → Override=%.3fV (lowest cell + 2mV)\n",
+                         originalTargetMV / 1000.0f, targetV);
+            lastLoggedTarget = targetMV;
+          }
+        }
 
         // Recalculate CRC using the ORIGINAL method for command messages (0x080-0x08F)
         // Uses finalxor[] array (not finalxor_table)
@@ -926,6 +954,7 @@ void performBroadcast()
   doc["highestVoltage"] = highestVoltage;
   doc["difference"] = (highestVoltage - lowestVoltage) * 1000.0f;
   doc["bmsTargetVoltage"] = bmsTargetVoltage;
+  doc["activeTargetVoltage"] = activeTargetVoltage;
   doc["gatewayMode"] = gatewayMode;
   doc["externalMaster"] = externalMasterDetected && (millis() - lastExternalCommandTime < 60000);
   doc["uptime"] = millis() / 1000;
@@ -1364,6 +1393,10 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <div style="font-size: 0.9em; opacity: 0.8; margin-bottom: 5px;">BMS Target</div>
                     <div id="bmsTarget" style="font-size: 1.5em; font-weight: bold; color: #60a5fa;">-.-V</div>
                 </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 0.9em; opacity: 0.8; margin-bottom: 5px;">Active Target</div>
+                    <div id="activeTarget" style="font-size: 1.5em; font-weight: bold; color: #34d399;">-.-V</div>
+                </div>
                 <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
                     <button onclick="sendCommand('start')">▶ Start Balancing</button>
                     <button class="stop" onclick="sendCommand('stop')">⏹ Stop / Gateway</button>
@@ -1463,6 +1496,20 @@ const char index_html[] PROGMEM = R"rawliteral(
                 bmsTargetElement.textContent = data.bmsTargetVoltage.toFixed(3) + 'V';
             } else {
                 bmsTargetElement.textContent = '-.-V';
+            }
+            
+            // Update active target voltage (what we actually send to modules)
+            const activeTargetElement = document.getElementById('activeTarget');
+            if (data.activeTargetVoltage > 0) {
+                activeTargetElement.textContent = data.activeTargetVoltage.toFixed(3) + 'V';
+                // Highlight if different from BMS target
+                if (Math.abs(data.activeTargetVoltage - data.bmsTargetVoltage) > 0.001) {
+                    activeTargetElement.style.color = '#fbbf24'; // Orange when overridden
+                } else {
+                    activeTargetElement.style.color = '#34d399'; // Green when same
+                }
+            } else {
+                activeTargetElement.textContent = '-.-V';
             }
             
             if (diff < 10) diffElement.className = 'stat-value good';
@@ -1678,6 +1725,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             statusEl.textContent = 'Uploading...';
             statusEl.className = 'connection-status disconnected';
             
+            const uploadStartTime = Date.now();
             const formData = new FormData();
             formData.append('update', file);
             
@@ -1685,19 +1733,34 @@ const char index_html[] PROGMEM = R"rawliteral(
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.text())
-            .then(data => {
+            .then(response => {
+                // If we get any response, assume success (ESP32 will restart)
                 statusEl.textContent = 'Update OK - Restarting...';
                 fileInput.value = '';
+                // Wait longer before reload to give ESP32 time to restart
                 setTimeout(() => {
                     location.reload();
-                }, 3000);
+                }, 5000);
+                return response.text();
             })
             .catch(error => {
-                statusEl.textContent = 'Update Failed!';
-                statusEl.className = 'connection-status disconnected';
-                alert('OTA update fejlede: ' + error);
-                fileInput.value = '';
+                // Network error is EXPECTED because ESP32 restarts immediately
+                // Only show error if it happens very quickly (actual upload failure)
+                const uploadTime = Date.now() - uploadStartTime;
+                if (uploadTime < 1000) {
+                    // Upload failed quickly - real error
+                    statusEl.textContent = 'Update Failed!';
+                    statusEl.className = 'connection-status disconnected';
+                    alert('OTA update fejlede: ' + error);
+                    fileInput.value = '';
+                } else {
+                    // Upload took time, connection lost - this is expected during restart
+                    statusEl.textContent = 'Update OK - Restarting...';
+                    fileInput.value = '';
+                    setTimeout(() => {
+                        location.reload();
+                    }, 5000);
+                }
             });
         }
         
