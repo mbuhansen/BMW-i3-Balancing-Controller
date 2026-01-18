@@ -87,7 +87,7 @@ bool externalMasterDetected = false;
 bool canDebugTwaiEnabled = false;    // TWAI (BMS) debug logging - DISABLED by default
 bool canDebugMcp2515Enabled = false; // MCP2515 (slave modules) debug logging - DISABLED by default
 float targetBalanceVoltage = 4.0f;
-float bmsTargetVoltage = 0.0f; // Target voltage from BMS 0x08X messages
+float bmsTargetVoltage = 0.0f;    // Target voltage from BMS 0x08X messages
 float activeTargetVoltage = 0.0f; // Actual target voltage sent to modules (overridden during balancing)
 uint8_t messageCounter = 0;
 uint8_t nextMessage = 0;
@@ -232,46 +232,6 @@ void printCANMessage(const twai_message_t &msg, bool isTX)
     Serial.printf("%02X ", msg.data[i]);
   }
   Serial.println();
-}
-
-// Send 0x11X messages to BMS during balancing
-// Slave modules stop sending these when balancing is active
-// Sends all 0x11X in a burst (not individually spaced)
-void send0x11MessagesBurst()
-{
-  // Send 0x11X for all active modules in one burst
-  for (int m = 0; m < MAX_MODULES; m++)
-  {
-    if (!modules[m].exists)
-      continue;
-
-    // Create 0x11X message (module diagnostic/status)
-    twai_message_t msg;
-    msg.identifier = 0x110 + m;
-    msg.data_length_code = 8;
-    msg.flags = TWAI_MSG_FLAG_NONE;
-    msg.extd = 0;
-    msg.rtr = 0;
-
-    // Standard 0x11X payload: 11 00 00 00 00 00 00 00
-    // No CRC on 0x11X messages - last bytes are always 00 00
-    msg.data[0] = 0x11;
-    msg.data[1] = 0x00;
-    msg.data[2] = 0x00;
-    msg.data[3] = 0x00;
-    msg.data[4] = 0x00;
-    msg.data[5] = 0x00;
-    msg.data[6] = 0x00;
-    msg.data[7] = 0x00;
-
-    // Send to BMS via TWAI
-    esp_err_t result = twai_transmit(&msg, pdMS_TO_TICKS(5));
-
-    if (canDebugTwaiEnabled && result == ESP_OK)
-    {
-      Serial.printf("[SYNTH 0x11X] Module %d -> BMS\n", m);
-    }
-  }
 }
 
 // Parse incoming CAN messages from slave modules
@@ -523,9 +483,6 @@ void readCANMessages()
             forward_msg.data[4] = 0x00;
             forward_msg.data[5] = 0x00;
 
-            Serial.printf("[MASK] 0x%03X byte 3-5: 0x%02X %02X %02X -> 0x00 00 00 (balance status masked)\n",
-                          mcp_id, originalByte3, originalByte4, originalByte5);
-
             // Recalculate CRC after masking
             forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg);
           }
@@ -569,29 +526,6 @@ void readCANMessages()
     }
   }
 
-  // ========== Send synthetic 0x11X messages during balancing ==========
-  // Slave modules stop sending 0x11X when balancing, so we generate them
-  // Send after receiving 0x10X messages (status messages)
-  static bool sent0x11ThisCycle = false;
-  static uint32_t last0x10XReceived = 0;
-
-  if (balancingActive)
-  {
-    // Track when we receive 0x10X messages
-    if (mcp_id >= 0x100 && mcp_id <= 0x10F)
-    {
-      last0x10XReceived = millis();
-      sent0x11ThisCycle = false; // Reset flag when new 0x10X arrives
-    }
-
-    // Send 0x11X burst shortly after last 0x10X (5ms delay)
-    if (!sent0x11ThisCycle && (millis() - last0x10XReceived > 5) && (millis() - last0x10XReceived < 20))
-    {
-      send0x11MessagesBurst();
-      sent0x11ThisCycle = true;
-    }
-  }
-
   // ========== Read from TWAI (BMS Requests) and forward to MCP2515 ==========
   // BMS sends requests (0x080-0x08F) to slave modules
   twai_message_t twai_msg;
@@ -625,7 +559,7 @@ void readCANMessages()
       {
         uint16_t rawVoltage = twai_msg.data[0] | (twai_msg.data[1] << 8);
         bmsTargetVoltage = rawVoltage / 1000.0f; // Convert to volts
-        activeTargetVoltage = bmsTargetVoltage; // Default: use BMS target
+        activeTargetVoltage = bmsTargetVoltage;  // Default: use BMS target
       }
 
       // Forward BMS requests to slave modules via MCP2515
@@ -647,14 +581,14 @@ void readCANMessages()
           uint16_t originalTargetMV = twai_msg.data[0] | (twai_msg.data[1] << 8);
           send_data[0] = targetMV & 0xFF;        // Low byte
           send_data[1] = (targetMV >> 8) & 0xFF; // High byte
-          activeTargetVoltage = targetV; // Update active target for web UI
-          
+          activeTargetVoltage = targetV;         // Update active target for web UI
+
           // Log target voltage override (only when it changes)
           static uint16_t lastLoggedTarget = 0;
           if (targetMV != lastLoggedTarget)
           {
             Serial.printf("⚡ Balancing target override: BMS=%.3fV → Override=%.3fV (lowest cell + 2mV)\n",
-                         originalTargetMV / 1000.0f, targetV);
+                          originalTargetMV / 1000.0f, targetV);
             lastLoggedTarget = targetMV;
           }
         }
