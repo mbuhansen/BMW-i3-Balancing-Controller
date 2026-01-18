@@ -303,25 +303,9 @@ void parseModuleMessage(const twai_message_t &msg)
     uint16_t oldBalanceStatus = module.balanceStatus;
     module.balanceStatus = ((msg.data[5] & 0x0F) << 8) | msg.data[4];
 
-    // Print when balance status changes (0x10X byte 4-5)
-    if (module.balanceStatus != oldBalanceStatus)
-    {
-      Serial.printf("[0x10X BALSTAT] Module %d: 0x%03X -> 0x%03X (byte 4-5: %02X %02X)\n",
-                    moduleId, oldBalanceStatus, module.balanceStatus, msg.data[4], msg.data[5]);
-    }
-
     // Update global balancing state from 0x10X status
     // Any non-zero balance status implies balancing is active
-    bool wasBalancing = module.balancing;
     module.balancing = (module.balanceStatus != 0);
-
-    if (module.balancing != wasBalancing)
-    {
-      if (module.balancing)
-        Serial.printf("[BALANCE] Module %d started balancing (Status: 0x%03X)\n", moduleId, module.balanceStatus);
-      else
-        Serial.printf("[BALANCE] Module %d stopped balancing\n", moduleId);
-    }
 
     break;
   }
