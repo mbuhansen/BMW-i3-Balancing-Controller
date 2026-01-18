@@ -35,7 +35,7 @@
 // Configuration
 #define MAX_MODULES 8
 #define CELLS_PER_MODULE 12
-#define MIN_BALANCE_VOLTAGE 3.9f   // Minimum voltage to start balancing (V)
+#define MIN_BALANCE_VOLTAGE 3.99f   // Minimum voltage to start balancing (V)
 #define BALANCE_THRESHOLD_MV 10    // Start balancing if cells differ by more than 10mV
 #define BALANCE_HYSTERESIS_MV 5    // Stop balancing when within 5mV
 #define CAN_COMMAND_INTERVAL_MS 20 // Send commands every 20ms (match BMS rate)
@@ -459,11 +459,12 @@ void readCANMessages()
           if (needsRecalc)
           {
             forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg);
-
+            /*
             if (canDebugTwaiEnabled)
             {
               Serial.printf("[MASK] 0x%03X - cleared bit 7 from voltage bytes\n", mcp_id);
             }
+            */
           }
         }
 
@@ -582,15 +583,6 @@ void readCANMessages()
           send_data[0] = targetMV & 0xFF;        // Low byte
           send_data[1] = (targetMV >> 8) & 0xFF; // High byte
           activeTargetVoltage = targetV;         // Update active target for web UI
-
-          // Log target voltage override (only when it changes)
-          static uint16_t lastLoggedTarget = 0;
-          if (targetMV != lastLoggedTarget)
-          {
-            Serial.printf("⚡ Balancing target override: BMS=%.3fV → Override=%.3fV (lowest cell + 2mV)\n",
-                          originalTargetMV / 1000.0f, targetV);
-            lastLoggedTarget = targetMV;
-          }
         }
 
         // Recalculate CRC using the ORIGINAL method for command messages (0x080-0x08F)
