@@ -87,6 +87,7 @@ bool externalMasterDetected = false;
 bool canDebugTwaiEnabled = false;    // TWAI (BMS) debug logging - DISABLED by default
 bool canDebugMcp2515Enabled = false; // MCP2515 (slave modules) debug logging - DISABLED by default
 float targetBalanceVoltage = 4.0f;
+float bmsTargetVoltage = 0.0f;       // Target voltage from BMS 0x08X messages
 uint8_t messageCounter = 0;
 uint8_t nextMessage = 0;
 uint32_t lastCommandTime = 0;
@@ -439,17 +440,17 @@ void readCANMessages()
         // BMS expects this bit clear, so mask it out for cell voltage messages (0x120-0x157)
         // NOTE: Byte 6 is a counter and must NOT be modified
         // NOTE: Do NOT mask 0x160-0x177 (balance status, temperatures, diagnostics)
-         if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6)
+        if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6)
         {
-        // Check if any bit 7 is set before masking
+          // Check if any bit 7 is set before masking
           bool needsRecalc = (forward_msg.data[1] & 0x80) || (forward_msg.data[3] & 0x80) || (forward_msg.data[5] & 0x80);
 
-         forward_msg.data[1] &= 0x7F; // Cell 1 high byte - clear bit 7
+          forward_msg.data[1] &= 0x7F; // Cell 1 high byte - clear bit 7
           forward_msg.data[3] &= 0x7F; // Cell 2 high byte - clear bit 7
           forward_msg.data[5] &= 0x7F; // Cell 3 high byte - clear bit 7
-        // Byte 6 (counter) is NOT modified
+                                       // Byte 6 (counter) is NOT modified
 
-        // Only recalculate CRC if we actually changed the data
+          // Only recalculate CRC if we actually changed the data
           if (needsRecalc)
           {
             forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg);
@@ -461,24 +462,29 @@ void readCANMessages()
           }
         }
 
-        // Mask balance status in 0x10X messages (bit 4 and 5 in byte 4)
-        
-        if (mcp_id >= 0x100 && mcp_id <= 0x10F && mcp_len >= 5)
+        // Mask balance status in 0x10X messages (byte 3, 4 and 5 contain balance status)
+        // Clear ALL THREE bytes to hide balancing from BMS
+        if (mcp_id >= 0x100 && mcp_id <= 0x10F && mcp_len >= 6)
         {
-          // Check if bit 4 or 5 are set (non-zero)
-          if (forward_msg.data[4] & 0x30) // 0x30 = 00110000 (bit 4 and 5)
+          // Check if any balance status is present (byte 3, 4 or 5 non-zero)
+          if (forward_msg.data[3] != 0 || forward_msg.data[4] != 0 || forward_msg.data[5] != 0)
           {
+            uint8_t originalByte3 = forward_msg.data[3];
             uint8_t originalByte4 = forward_msg.data[4];
-            forward_msg.data[4] &= 0xCF; // Clear bit 4 and 5 (0xCF = 11001111)
+            uint8_t originalByte5 = forward_msg.data[5];
 
-            Serial.printf("[MASK] 0x%03X byte 4: 0x%02X -> 0x%02X (balance status masked)\n",
-                         mcp_id, originalByte4, forward_msg.data[4]);
+            // Clear ALL THREE bytes that contain balance status
+            forward_msg.data[3] = 0x00;
+            forward_msg.data[4] = 0x00;
+            forward_msg.data[5] = 0x00;
+
+            Serial.printf("[MASK] 0x%03X byte 3-5: 0x%02X %02X %02X -> 0x00 00 00 (balance status masked)\n",
+                          mcp_id, originalByte3, originalByte4, originalByte5);
 
             // Recalculate CRC after masking
             forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg);
           }
         }
-        
 
         // Mask balance status in 0x16X messages (byte 2-5 contain balance data)
         // Clear balance data so BMS doesn't see that modules are balancing
@@ -518,6 +524,29 @@ void readCANMessages()
     }
   }
 
+  // ========== Send synthetic 0x11X messages during balancing ==========
+  // Slave modules stop sending 0x11X when balancing, so we generate them
+  // Send after receiving 0x10X messages (status messages)
+  static bool sent0x11ThisCycle = false;
+  static uint32_t last0x10XReceived = 0;
+
+  if (balancingActive)
+  {
+    // Track when we receive 0x10X messages
+    if (mcp_id >= 0x100 && mcp_id <= 0x10F)
+    {
+      last0x10XReceived = millis();
+      sent0x11ThisCycle = false; // Reset flag when new 0x10X arrives
+    }
+
+    // Send 0x11X burst shortly after last 0x10X (5ms delay)
+    if (!sent0x11ThisCycle && (millis() - last0x10XReceived > 5) && (millis() - last0x10XReceived < 20))
+    {
+      send0x11MessagesBurst();
+      sent0x11ThisCycle = true;
+    }
+  }
+
   // ========== Read from TWAI (BMS Requests) and forward to MCP2515 ==========
   // BMS sends requests (0x080-0x08F) to slave modules
   twai_message_t twai_msg;
@@ -546,6 +575,13 @@ void readCANMessages()
     // BMS request to slave modules (0x080-0x08F)
     if ((id & 0xFF0) == 0x080)
     {
+      // Extract target voltage from BMS command (byte 0-1)
+      if (twai_msg.data_length_code >= 2)
+      {
+        uint16_t rawVoltage = twai_msg.data[0] | (twai_msg.data[1] << 8);
+        bmsTargetVoltage = rawVoltage / 1000.0f; // Convert to volts
+      }
+      
       // Forward BMS requests to slave modules via MCP2515
       // Modify byte 4 if balancing is active
       uint8_t send_data[8];
@@ -605,6 +641,46 @@ void readCANMessages()
           lastDropWarning = millis();
         }
       }
+    }
+  }
+}
+
+// Send 0x11X messages to BMS during balancing
+// Slave modules stop sending these when balancing is active
+// Sends all 0x11X in a burst (not individually spaced)
+void send0x11MessagesBurst()
+{
+  // Send 0x11X for all active modules in one burst
+  for (int m = 0; m < MAX_MODULES; m++)
+  {
+    if (!modules[m].exists)
+      continue;
+
+    // Create 0x11X message (module diagnostic/status)
+    twai_message_t msg;
+    msg.identifier = 0x110 + m;
+    msg.data_length_code = 8;
+    msg.flags = TWAI_MSG_FLAG_NONE;
+    msg.extd = 0;
+    msg.rtr = 0;
+
+    // Standard 0x11X payload: 11 00 00 00 00 00 00 00
+    // No CRC on 0x11X messages - last bytes are always 00 00
+    msg.data[0] = 0x11;
+    msg.data[1] = 0x00;
+    msg.data[2] = 0x00;
+    msg.data[3] = 0x00;
+    msg.data[4] = 0x00;
+    msg.data[5] = 0x00;
+    msg.data[6] = 0x00;
+    msg.data[7] = 0x00;
+
+    // Send to BMS via TWAI
+    esp_err_t result = twai_transmit(&msg, pdMS_TO_TICKS(5));
+
+    if (canDebugTwaiEnabled && result == ESP_OK)
+    {
+      Serial.printf("[SYNTH 0x11X] Module %d -> BMS\n", m);
     }
   }
 }
@@ -849,6 +925,7 @@ void performBroadcast()
   doc["lowestVoltage"] = lowestVoltage;
   doc["highestVoltage"] = highestVoltage;
   doc["difference"] = (highestVoltage - lowestVoltage) * 1000.0f;
+  doc["bmsTargetVoltage"] = bmsTargetVoltage;
   doc["gatewayMode"] = gatewayMode;
   doc["externalMaster"] = externalMasterDetected && (millis() - lastExternalCommandTime < 60000);
   doc["uptime"] = millis() / 1000;
@@ -1282,9 +1359,17 @@ const char index_html[] PROGMEM = R"rawliteral(
         </div>
         
         <div class="controls">
-            <button onclick="sendCommand('start')">▶ Start Balancing</button>
-            <button class="stop" onclick="sendCommand('stop')">⏹ Stop / Gateway</button>
-            <button class="auto" onclick="sendCommand('auto')">🔄 Auto Mode</button>
+            <div style="display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap;">
+                <div style="text-align: center;">
+                    <div style="font-size: 0.9em; opacity: 0.8; margin-bottom: 5px;">BMS Target</div>
+                    <div id="bmsTarget" style="font-size: 1.5em; font-weight: bold; color: #60a5fa;">-.-V</div>
+                </div>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
+                    <button onclick="sendCommand('start')">▶ Start Balancing</button>
+                    <button class="stop" onclick="sendCommand('stop')">⏹ Stop / Gateway</button>
+                    <button class="auto" onclick="sendCommand('auto')">🔄 Auto Mode</button>
+                </div>
+            </div>
         </div>
         
         <div class="modules" id="modules">
@@ -1371,6 +1456,14 @@ const char index_html[] PROGMEM = R"rawliteral(
             const diff = data.difference;
             const diffElement = document.getElementById('difference');
             diffElement.textContent = diff.toFixed(1) + ' mV';
+            
+            // Update BMS target voltage
+            const bmsTargetElement = document.getElementById('bmsTarget');
+            if (data.bmsTargetVoltage > 0) {
+                bmsTargetElement.textContent = data.bmsTargetVoltage.toFixed(3) + 'V';
+            } else {
+                bmsTargetElement.textContent = '-.-V';
+            }
             
             if (diff < 10) diffElement.className = 'stat-value good';
             else if (diff < 30) diffElement.className = 'stat-value warning';
