@@ -368,24 +368,14 @@ void parseModuleMessage(const twai_message_t &msg)
 
   case 6:
   {
-    // Balancing status (0x16X)
+    // Module Total Voltage (0x16X)
+    // Bytes 0-1: Total Voltage in mV (Little Endian)
+    uint16_t voltageRaw = msg.data[0] | (msg.data[1] << 8);
+    module.moduleVoltage = voltageRaw / 1000.0f;
+
+    // Balancing status in bytes 2-5 (optional check)
     // PREVIOUSLY: used this for balancing detection.
     // NOW: Moved to 0x10X based on user request.
-    /*
-    bool wasBalancing = module.balancing;
-    module.balancing = (msg.data[2] != 0 || msg.data[3] != 0 || msg.data[4] != 0 || msg.data[5] != 0);
-
-    // Print when balancing state changes
-    if (module.balancing && !wasBalancing)
-    {
-      Serial.printf("[BALANCE] Module %d started balancing (0x%03X: %02X %02X %02X %02X)\n",
-                    moduleId, id, msg.data[2], msg.data[3], msg.data[4], msg.data[5]);
-    }
-    else if (!module.balancing && wasBalancing)
-    {
-      Serial.printf("[BALANCE] Module %d stopped balancing\n", moduleId);
-    }
-    */
     break;
   }
 
@@ -930,6 +920,7 @@ void performBroadcast()
 
     JsonObject moduleObj = modulesArray.add<JsonObject>();
     moduleObj["id"] = m + 1;
+    moduleObj["voltage"] = modules[m].moduleVoltage;
     moduleObj["balancing"] = (modules[m].balanceStatus != 0); // Use balanceStatus from 0x10X byte 4-5 (same as SimpleBMS)
     moduleObj["error"] = modules[m].errorCode;
 
@@ -1628,7 +1619,12 @@ const char index_html[] PROGMEM = R"rawliteral(
                 
                 const titleDiv = document.createElement('div');
                 titleDiv.className = 'module-title';
-                titleDiv.textContent = 'Module ' + module.id;
+                // Display Module Voltage
+                let voltageText = '';
+                if (module.voltage > 0) {
+                    voltageText = '<span style="font-size:0.8em; margin-left:10px; opacity:0.8; font-weight:normal;">' + module.voltage.toFixed(2) + 'V</span>';
+                }
+                titleDiv.innerHTML = 'Module ' + module.id + voltageText;
                 
                 const indicatorDiv = document.createElement('div');
                 indicatorDiv.className = 'balance-indicator ' + (module.balancing ? 'active' : 'inactive');
