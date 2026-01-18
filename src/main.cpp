@@ -491,27 +491,38 @@ void readCANMessages()
           }
         }
 
-        // Mask balance status in 0x16X messages (byte 2-5 contain balance data)
-        // Clear balance data so BMS doesn't see that modules are balancing
-        /*
-        if (mcp_id >= 0x160 && mcp_id <= 0x167 && mcp_len >= 6)
+        // OVERRIDE Module Voltage in 0x16X messages during balancing
+        // When balancing, the measured module voltage (0x16X bytes 0-1) sags.
+        // We replace it with the sum of the 12 individual cell voltages to report a stable voltage.
+        if (mcp_id >= 0x160 && mcp_id <= 0x16F && mcp_len >= 8)
         {
-          // Check if any balance data is present
-          if (forward_msg.data[2] != 0 || forward_msg.data[3] != 0 || forward_msg.data[4] != 0 || forward_msg.data[5] != 0)
+          int moduleIndex = mcp_id & 0x0F;
+          if (moduleIndex >= 0 && moduleIndex < MAX_MODULES)
           {
-            Serial.printf("[MASK] 0x%03X - clearing balance data (bytes 2-5)\n", mcp_id);
+            // Check if balancing is active (based on 0x10X status or our command)
+            // We use balanceStatus from the most recent 0x10X message
+            if (modules[moduleIndex].balanceStatus != 0)
+            {
+              float sumVoltage = 0.0f;
+              // Sum up all 12 cell voltages
+              for (int c = 0; c < 12; c++)
+              {
+                sumVoltage += modules[moduleIndex].cellVoltages[c];
+              }
 
-            forward_msg.data[2] = 0;
-            forward_msg.data[3] = 0;
-            forward_msg.data[4] = 0;
-            forward_msg.data[5] = 0;
+              // 0x16X sends voltage in mV (approx 48000 mV for 48V)
+              // Data is Little Endian (Byte 0 = LSB, Byte 1 = MSB)
+              uint16_t voltageVal = (uint16_t)(sumVoltage * 1000.0f);
 
-            // Recalculate CRC after masking
-            uint8_t msgId = mcp_id & 0x0F;
-            forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg, msgId);
+              // Update the message
+              forward_msg.data[0] = voltageVal & 0xFF;
+              forward_msg.data[1] = (voltageVal >> 8) & 0xFF;
+
+              // Recalculate CRC
+              forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg);
+            }
           }
         }
-        */
 
         esp_err_t result = twai_transmit(&forward_msg, pdMS_TO_TICKS(10));
 
@@ -545,7 +556,7 @@ void readCANMessages()
       if (millis() - lastTwaiDebug > 200) // Only every 200ms
       {
         lastTwaiDebug = millis();
-        Serial.printf("[TWAI RX] 0x%03X [%d] ", id, twai_msg.data_length_code);
+        Serial.printf("[TWAI    RX] 0x%03X [%d] ", id, twai_msg.data_length_code);
         for (int i = 0; i < twai_msg.data_length_code; i++)
         {
           Serial.printf("%02X ", twai_msg.data[i]);
