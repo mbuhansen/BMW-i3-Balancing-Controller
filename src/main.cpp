@@ -106,11 +106,11 @@ unsigned long balancingCooldownStartTime = 0;
 const unsigned long BALANCING_TIMEOUT_MS = 15 * 60 * 1000;  // 15 minutes timeout if no feedback
 const unsigned long BALANCING_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour cooldown after timeout
 
-// Balancing duty cycle (Run 30m / Pause 10m)
+// Balancing duty cycle (Run 15m / Pause 5m)
 bool balancingPaused = false;
 unsigned long balancingCycleTimer = 0;
-const unsigned long BALANCE_RUN_TIME_MS = 30 * 60 * 1000;   // 30 minutes continuous
-const unsigned long BALANCE_PAUSE_TIME_MS = 10 * 60 * 1000; // 10 minutes pause
+const unsigned long BALANCE_RUN_TIME_MS = 15 * 60 * 1000;   // 15 minutes continuous
+const unsigned long BALANCE_PAUSE_TIME_MS = 5 * 60 * 1000;  // 5 minutes pause
 
 // (Unused legacy variables removed)
 
@@ -823,7 +823,7 @@ void updateBalancing()
   if (manualMode)
     return;
 
-  // Duty Cycle Logic (30m Run / 10m Pause)
+  // Duty Cycle Logic (15m Run / 5m Pause)
   if (balancingActive)
   {
     if (!balancingPaused)
