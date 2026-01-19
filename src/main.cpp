@@ -538,7 +538,7 @@ void readCANMessages()
             /*
             if (canDebugTwaiEnabled)
             {
-              Serial.printf("[MASK] 0x%03X - cleared bit 7 from voltage bytes\n", mcp_id);
+              telnetPrintf("[MASK] 0x%03X - cleared bit 7 from voltage bytes\n", mcp_id);
             }
             */
           }

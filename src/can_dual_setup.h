@@ -45,6 +45,9 @@
 
 // External debug flag from main.cpp
 extern bool canDebugMcp2515Enabled;
+// External telnet functions from main.cpp
+extern void telnetPrintf(const char *format, ...);
+extern void telnetPrintln(const char *str);
 
 // ACAN2515 CAN controller
 ACAN2515 *CAN2_ptr = nullptr;
@@ -144,12 +147,12 @@ inline bool sendCAN2(uint32_t id, uint8_t len, uint8_t *data)
     if (millis() - lastDebug > 200 || !success)
     { // Only every 200ms or on failure
       lastDebug = millis();
-      Serial.printf("[MCP2515 TX] 0x%03X [%d] ", id, len);
+      telnetPrintf("[MCP2515 TX] 0x%03X [%d] ", id, len);
       for (int i = 0; i < len; i++)
       {
-        Serial.printf("%02X ", data[i]);
+        telnetPrintf("%02X ", data[i]);
       }
-      Serial.printf("%s (%lu total)\n", success ? "OK" : "FAIL", ++debugCount);
+      telnetPrintf("%s (%lu total)\n", success ? "OK" : "FAIL", ++debugCount);
     }
   }
 
@@ -174,12 +177,12 @@ inline bool readCAN2(uint32_t &id, uint8_t &len, uint8_t *data)
     // Debug output for RX (always show to debug slave responses)
     if (canDebugMcp2515Enabled)
     {
-      Serial.printf("[MCP2515 RX] 0x%03X [%d] ", id, len);
+      telnetPrintf("[MCP2515 RX] 0x%03X [%d] ", id, len);
       for (int i = 0; i < len; i++)
       {
-        Serial.printf("%02X ", data[i]);
+        telnetPrintf("%02X ", data[i]);
       }
-      Serial.println();
+      telnetPrintln("");
     }
 
     return true;
@@ -205,7 +208,7 @@ inline void printMCP2515Stats()
     return;
   }
 
-  Serial.printf("[MCP2515 Stats] Available: %u\n",
+  telnetPrintf("[MCP2515 Stats] Available: %u\n",
                 CAN2_ptr->available());
 }
 
@@ -230,6 +233,6 @@ inline void clearMCP2515Buffers()
 
   if (cleared > 0)
   {
-    Serial.printf("Cleared %d MCP2515 RX messages\n", cleared);
+    telnetPrintf("Cleared %d MCP2515 RX messages\n", cleared);
   }
 }
