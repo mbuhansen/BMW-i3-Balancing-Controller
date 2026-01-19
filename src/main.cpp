@@ -41,6 +41,7 @@
 float minBalanceVoltage = 3.99f;  // Minimum voltage to start balancing (V)
 float balanceThresholdMv = 10.0f; // Start balancing if cells differ by more than this (mV)
 float balanceHysteresisMv = 5.0f; // Stop balancing when within this (mV)
+String controllerSuffix = "";     // Suffix for controller name (e.g. "1", "2")
 
 // BMW CRC8 finalxor values for COMMAND messages (0x080-0x08F)
 // Original values from SimpleBMS - used when modifying BMS commands
@@ -804,6 +805,11 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
             balanceHysteresisMv = doc["balanceHysteresis"];
             Serial.printf("Balance hysteresis set to %.0fmV\n", balanceHysteresisMv);
           }
+          if (doc["controllerSuffix"].is<const char *>())
+          {
+            controllerSuffix = doc["controllerSuffix"].as<String>();
+            Serial.printf("Controller suffix set to %s\n", controllerSuffix.c_str());
+          }
         }
         else if (strcmp(command, "setThreshold") == 0)
         {
@@ -894,6 +900,7 @@ void performBroadcast()
   doc["minBalanceVoltage"] = minBalanceVoltage;
   doc["balanceThresholdMv"] = balanceThresholdMv;
   doc["balanceHysteresisMv"] = balanceHysteresisMv;
+  doc["controllerSuffix"] = controllerSuffix;
 
   JsonArray modulesArray = doc["modules"].to<JsonArray>();
 
@@ -937,7 +944,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BMW i3 Balancing Controller 1</title>
+    <title>BMW i3 Balancing Controller</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
@@ -1377,7 +1384,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     </div>
     
     <div class="container">
-        <h1>⚡ BMW i3 Balancing Controller 1</h1>
+        <h1>⚡ BMW i3 Balancing Controller <span id="titleSuffix"></span></h1>
         
         <div class="status-led-container">
             <div id="statusLed" class="status-led green"></div>
@@ -1487,6 +1494,12 @@ const char index_html[] PROGMEM = R"rawliteral(
                             <span>mV</span>
                         </div>
                     </div>
+                    <div class="setting-item">
+                        <div class="setting-label">Controller Name Suffix</div>
+                        <div class="setting-input-group">
+                            <input type="text" id="controllerSuffix" placeholder="e.g. 1" maxlength="5">
+                        </div>
+                    </div>
                 </div>
                 
                 <div style="display: flex; justify-content: center; margin-top: 15px;">
@@ -1539,6 +1552,14 @@ const char index_html[] PROGMEM = R"rawliteral(
             }
             if (document.activeElement.id !== 'balanceHysteresis' && data.balanceHysteresisMv) {
                 document.getElementById('balanceHysteresis').value = data.balanceHysteresisMv.toFixed(0);
+            }
+            if (data.controllerSuffix !== undefined) {
+                if (document.activeElement.id !== 'controllerSuffix') {
+                    document.getElementById('controllerSuffix').value = data.controllerSuffix;
+                }
+                const suffix = data.controllerSuffix ? ' ' + data.controllerSuffix : '';
+                document.title = 'BMW i3 Balancing Controller' + suffix;
+                document.getElementById('titleSuffix').textContent = data.controllerSuffix;
             }
             
             // Update LED indicator
@@ -1772,13 +1793,15 @@ const char index_html[] PROGMEM = R"rawliteral(
             const minBalanceVoltage = parseFloat(document.getElementById('minBalanceVoltage').value);
             const balanceThreshold = parseFloat(document.getElementById('balanceThreshold').value);
             const balanceHysteresis = parseFloat(document.getElementById('balanceHysteresis').value);
+            const controllerSuffix = document.getElementById('controllerSuffix').value;
             
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     command: 'updateSettings',
                     minBalanceVoltage: minBalanceVoltage,
                     balanceThreshold: balanceThreshold,
-                    balanceHysteresis: balanceHysteresis
+                    balanceHysteresis: balanceHysteresis,
+                    controllerSuffix: controllerSuffix
                 }));
                 
                 // Visual feedback
