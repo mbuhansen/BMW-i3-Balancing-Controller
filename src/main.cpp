@@ -100,6 +100,20 @@ uint32_t lastCommandTime = 0;
 uint32_t lastExternalCommandTime = 0;
 uint32_t lastDataUpdate = 0;
 
+// Balancing timeouts
+unsigned long lastBalancingFeedbackTime = 0;
+unsigned long balancingCooldownStartTime = 0;
+const unsigned long BALANCING_TIMEOUT_MS = 15 * 60 * 1000;  // 15 minutes timeout if no feedback
+const unsigned long BALANCING_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour cooldown after timeout
+
+// Balancing duty cycle (Run 30m / Pause 10m)
+bool balancingPaused = false;
+unsigned long balancingCycleTimer = 0;
+const unsigned long BALANCE_RUN_TIME_MS = 30 * 60 * 1000;   // 30 minutes continuous
+const unsigned long BALANCE_PAUSE_TIME_MS = 10 * 60 * 1000; // 10 minutes pause
+
+// (Unused legacy variables removed)
+
 // Single-core mode - all tasks run on Core 1 (WiFi core)
 // No mutex needed - everything runs on same core
 
@@ -408,6 +422,12 @@ void parseModuleMessage(const twai_message_t &msg)
     // Any non-zero balance status implies balancing is active
     module.balancing = (module.balanceStatus != 0);
 
+    // Update feedback timer if any module reports balancing
+    if (module.balancing)
+    {
+      lastBalancingFeedbackTime = millis();
+    }
+
     break;
   }
 
@@ -656,7 +676,8 @@ void readCANMessages()
       uint8_t send_data[8];
       memcpy(send_data, twai_msg.data, twai_msg.data_length_code);
 
-      if (balancingActive && twai_msg.data_length_code >= 8)
+      // Only enable balancing if active AND not in cooling pause
+      if (balancingActive && !balancingPaused && twai_msg.data_length_code >= 8)
       {
         send_data[4] = 0x08; // Enable balancing
 
@@ -802,6 +823,62 @@ void updateBalancing()
   if (manualMode)
     return;
 
+  // Duty Cycle Logic (30m Run / 10m Pause)
+  if (balancingActive)
+  {
+    if (!balancingPaused)
+    {
+      if (millis() - balancingCycleTimer > BALANCE_RUN_TIME_MS)
+      {
+        balancingPaused = true;
+        balancingCycleTimer = millis();
+        // telnetPrintln("Balancing: Pausing (10m cool-down)");
+      }
+    }
+    else
+    {
+      if (millis() - balancingCycleTimer > BALANCE_PAUSE_TIME_MS)
+      {
+        balancingPaused = false;
+        balancingCycleTimer = millis();
+        // telnetPrintln("Balancing: Resuming (30m run)");
+      }
+    }
+  }
+  else
+  {
+    balancingPaused = false;
+    balancingCycleTimer = millis();
+  }
+
+  // Check timeout while balancing active
+  if (balancingActive)
+  {
+    if (millis() - lastBalancingFeedbackTime > BALANCING_TIMEOUT_MS)
+    {
+      balancingActive = false;
+      balancingCooldownStartTime = millis();
+      telnetPrintf("Stopping balancing: Timeout (no feedback for 15m). Waiting 1h.\n");
+      return;
+    }
+  }
+
+  // Check cooldown if not active (prevent restart)
+  if (!balancingActive && balancingCooldownStartTime > 0)
+  {
+    if (millis() - balancingCooldownStartTime < BALANCING_COOLDOWN_MS)
+    {
+      // In cooldown
+      return;
+    }
+    else
+    {
+      // Cooldown expired
+      balancingCooldownStartTime = 0;
+      telnetPrintln("Balancing cooldown finished, ready to balance again.");
+    }
+  }
+
   float lowestVoltage = getLowestCellVoltage();
   float highestVoltage = getHighestCellVoltage();
   float difference_mV = (highestVoltage - lowestVoltage) * 1000.0f;
@@ -811,6 +888,8 @@ void updateBalancing()
   {
     // Start balancing
     balancingActive = true;
+    balancingCycleTimer = millis();       // Start duty cycle timer
+    lastBalancingFeedbackTime = millis(); // Reset timeout timer
     telnetPrintf("Starting balancing: Lowest=%.3fV, Highest=%.3fV, Diff=%.1fmV\n",
                  lowestVoltage, highestVoltage, difference_mV);
   }
