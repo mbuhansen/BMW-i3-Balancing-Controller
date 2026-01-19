@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include <ArduinoOTA.h>
 #include <Update.h>
+#include <Preferences.h>
 
 #include "driver/twai.h"
 #include "can_dual_setup.h" // MCP2515 dual CAN
@@ -107,6 +108,104 @@ float getHighestCellVoltage();
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
+Preferences preferences;
+
+// Telnet server for remote logging (Port 23)
+WiFiServer telnetServer(23);
+WiFiClient telnetClient;
+bool telnetConnected = false;
+
+// Telnet logging functions
+void telnetPrint(const char *str)
+{
+  Serial.print(str);
+  if (telnetConnected && telnetClient && telnetClient.connected())
+  {
+    size_t len = strlen(str);
+    telnetClient.write((const uint8_t *)str, len);
+  }
+}
+
+void telnetPrintf(const char *format, ...)
+{
+  char buffer[256];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(buffer, sizeof(buffer), format, args);
+  va_end(args);
+
+  Serial.print(buffer);
+  if (telnetConnected && telnetClient && telnetClient.connected())
+  {
+    size_t len = strlen(buffer);
+    telnetClient.write((const uint8_t *)buffer, len);
+  }
+}
+
+void telnetPrintln(const char *str)
+{
+  Serial.println(str);
+  if (telnetConnected && telnetClient && telnetClient.connected())
+  {
+    telnetClient.write((const uint8_t *)str, strlen(str));
+    telnetClient.write((const uint8_t *)"\r\n", 2);
+  }
+}
+
+void checkTelnetClient()
+{
+  // Check for new client connection
+  if (telnetServer.hasClient())
+  {
+    WiFiClient newClient = telnetServer.accept();
+
+    if (newClient)
+    {
+      // Disconnect old client if exists
+      if (telnetClient && telnetClient.connected())
+      {
+        Serial.println("[Telnet] Disconnecting old client for new connection");
+        telnetClient.write((const uint8_t *)"\n[Server] New client connecting - closing this session\n", 55);
+        delay(100);
+        telnetClient.stop();
+      }
+
+      telnetClient = newClient;
+      telnetClient.setNoDelay(true); // Disable Nagle algorithm for immediate send
+      telnetConnected = true;
+
+      Serial.printf("[Telnet] Client connected from %s\n", telnetClient.remoteIP().toString().c_str());
+
+      // Send welcome message directly
+      const char *welcome = "=== BMW i3 Balancing Controller Telnet Log ===\r\n";
+      telnetClient.write((const uint8_t *)welcome, strlen(welcome));
+
+      char ipMsg[64];
+      snprintf(ipMsg, sizeof(ipMsg), "IP: %s\r\n", WiFi.localIP().toString().c_str());
+      telnetClient.write((const uint8_t *)ipMsg, strlen(ipMsg));
+
+      char timeMsg[64];
+      snprintf(timeMsg, sizeof(timeMsg), "Time: %lu seconds\r\n", millis() / 1000);
+      telnetClient.write((const uint8_t *)timeMsg, strlen(timeMsg));
+
+      const char *sep = "==============================================\r\n\n";
+      telnetClient.write((const uint8_t *)sep, strlen(sep));
+
+      Serial.println("[Telnet] Welcome message sent");
+    }
+  }
+
+  // Check if client disconnected
+  if (telnetConnected && telnetClient)
+  {
+    if (!telnetClient.connected())
+    {
+      Serial.println("[Telnet] Client disconnected");
+      telnetClient.stop();
+      telnetConnected = false;
+    }
+  }
+}
 
 // CRC8 calculation for BMW CAN messages
 class CRC8
@@ -228,13 +327,13 @@ void printCANMessage(const twai_message_t &msg, bool isTX)
   char direction[4];
   strcpy(direction, isTX ? "TX" : "RX");
 
-  Serial.printf("[TWAI %s] 0x%03X [%d] ", direction, msg.identifier, msg.data_length_code);
+  telnetPrintf("[TWAI %s] 0x%03X [%d] ", direction, msg.identifier, msg.data_length_code);
 
   for (int i = 0; i < msg.data_length_code; i++)
   {
-    Serial.printf("%02X ", msg.data[i]);
+    telnetPrintf("%02X ", msg.data[i]);
   }
-  Serial.println();
+  telnetPrintln("");
 }
 
 // Parse incoming CAN messages from slave modules
@@ -504,12 +603,12 @@ void readCANMessages()
         // Debug output for forwarding
         if (canDebugTwaiEnabled)
         {
-          Serial.printf("[TWAI    TX] 0x%03X [%d] ", forward_msg.identifier, forward_msg.data_length_code);
+          telnetPrintf("[TWAI    TX] 0x%03X [%d] ", forward_msg.identifier, forward_msg.data_length_code);
           for (int i = 0; i < forward_msg.data_length_code; i++)
           {
-            Serial.printf("%02X ", forward_msg.data[i]);
+            telnetPrintf("%02X ", forward_msg.data[i]);
           }
-          Serial.printf("%s\n", result == ESP_OK ? "OK" : "FAIL");
+          telnetPrintf("%s\n", result == ESP_OK ? "OK" : "FAIL");
         }
       }
     }
@@ -531,12 +630,12 @@ void readCANMessages()
       if (millis() - lastTwaiDebug > 200) // Only every 200ms
       {
         lastTwaiDebug = millis();
-        Serial.printf("[TWAI    RX] 0x%03X [%d] ", id, twai_msg.data_length_code);
+        telnetPrintf("[TWAI    RX] 0x%03X [%d] ", id, twai_msg.data_length_code);
         for (int i = 0; i < twai_msg.data_length_code; i++)
         {
-          Serial.printf("%02X ", twai_msg.data[i]);
+          telnetPrintf("%02X ", twai_msg.data[i]);
         }
-        Serial.println();
+        telnetPrintln("");
       }
     }
 
@@ -711,20 +810,20 @@ void updateBalancing()
   {
     // Start balancing
     balancingActive = true;
-    Serial.printf("Starting balancing: Lowest=%.3fV, Highest=%.3fV, Diff=%.1fmV\n",
-                  lowestVoltage, highestVoltage, difference_mV);
+    telnetPrintf("Starting balancing: Lowest=%.3fV, Highest=%.3fV, Diff=%.1fmV\n",
+                 lowestVoltage, highestVoltage, difference_mV);
   }
   else if (balancingActive && difference_mV < balanceHysteresisMv)
   {
     // Stop balancing
     balancingActive = false;
-    Serial.printf("Stopping balancing: Cells balanced within %.1fmV\n", difference_mV);
+    telnetPrintf("Stopping balancing: Cells balanced within %.1fmV\n", difference_mV);
   }
   else if (balancingActive && highestVoltage < minBalanceVoltage)
   {
     // Stop balancing if voltage drops too low
     balancingActive = false;
-    Serial.printf("Stopping balancing: Cell voltage too low (%.3fV)\n", highestVoltage);
+    telnetPrintf("Stopping balancing: Cell voltage too low (%.3fV)\n", highestVoltage);
   }
 }
 
@@ -759,56 +858,70 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         {
           balancingActive = true;
           manualMode = true;
-          Serial.println("Manual start - balancing active (intercepts BMS requests)");
+          telnetPrintln("Manual start - balancing active (intercepts BMS requests)");
         }
         else if (strcmp(command, "stop") == 0)
         {
           balancingActive = false;
           manualMode = true;
-          Serial.println("Manual stop - gateway mode (forwards BMS requests)");
+          telnetPrintln("Manual stop - gateway mode (forwards BMS requests)");
         }
         else if (strcmp(command, "auto") == 0)
         {
           manualMode = false;
-          Serial.println("Auto mode - smart balancing enabled");
+          telnetPrintln("Auto mode - smart balancing enabled");
         }
         else if (strcmp(command, "restart") == 0)
         {
-          Serial.println("Restart command received - restarting ESP32...");
+          telnetPrintln("Restart command received - restarting ESP32...");
           delay(500);
           ESP.restart();
         }
         else if (strcmp(command, "toggleDebugTwai") == 0)
         {
           canDebugTwaiEnabled = !canDebugTwaiEnabled;
-          Serial.printf("TWAI debug logging %s\n", canDebugTwaiEnabled ? "enabled" : "disabled");
+          telnetPrintf("TWAI debug logging %s\n", canDebugTwaiEnabled ? "enabled" : "disabled");
         }
         else if (strcmp(command, "toggleDebugMcp2515") == 0)
         {
           canDebugMcp2515Enabled = !canDebugMcp2515Enabled;
-          Serial.printf("MCP2515 debug logging %s\n", canDebugMcp2515Enabled ? "enabled" : "disabled");
+          telnetPrintf("MCP2515 debug logging %s\n", canDebugMcp2515Enabled ? "enabled" : "disabled");
         }
         else if (strcmp(command, "updateSettings") == 0)
         {
+          bool changed = false;
           if (doc["minBalanceVoltage"].is<float>())
           {
             minBalanceVoltage = doc["minBalanceVoltage"];
+            preferences.putFloat("minVolts", minBalanceVoltage);
             Serial.printf("Min balance voltage set to %.2fV\n", minBalanceVoltage);
+            changed = true;
           }
           if (doc["balanceThreshold"].is<float>())
           {
             balanceThresholdMv = doc["balanceThreshold"];
+            preferences.putFloat("threshold", balanceThresholdMv);
             Serial.printf("Balance threshold set to %.0fmV\n", balanceThresholdMv);
+            changed = true;
           }
           if (doc["balanceHysteresis"].is<float>())
           {
             balanceHysteresisMv = doc["balanceHysteresis"];
+            preferences.putFloat("hysteresis", balanceHysteresisMv);
             Serial.printf("Balance hysteresis set to %.0fmV\n", balanceHysteresisMv);
+            changed = true;
           }
           if (doc["controllerSuffix"].is<const char *>())
           {
             controllerSuffix = doc["controllerSuffix"].as<String>();
+            preferences.putString("suffix", controllerSuffix);
             Serial.printf("Controller suffix set to %s\n", controllerSuffix.c_str());
+            changed = true;
+          }
+
+          if (changed)
+          {
+            Serial.println("Settings saved to flash memory");
           }
         }
         else if (strcmp(command, "setThreshold") == 0)
@@ -1912,6 +2025,18 @@ void setup()
   Serial.begin(115200);
   delay(1000);
 
+  // Load settings from flash
+  preferences.begin("bmw-i3-balance", false);
+  minBalanceVoltage = preferences.getFloat("minVolts", 3.99f);
+  balanceThresholdMv = preferences.getFloat("threshold", 10.0f);
+  balanceHysteresisMv = preferences.getFloat("hysteresis", 5.0f);
+  controllerSuffix = preferences.getString("suffix", "");
+  Serial.printf("Settings loaded from flash:\n");
+  Serial.printf("- Min Voltage: %.2fV\n", minBalanceVoltage);
+  Serial.printf("- Threshold: %.0fmV\n", balanceThresholdMv);
+  Serial.printf("- Hysteresis: %.0fmV\n", balanceHysteresisMv);
+  Serial.printf("- Suffix: '%s'\n", controllerSuffix.c_str());
+
   Serial.println("\n\n=================================");
   Serial.println("BMW i3 Balancing Controller");
   Serial.println("LilyGO T-2CAN");
@@ -1975,6 +2100,12 @@ void setup()
     Serial.print("IP address: ");
     Serial.println(IP);
     Serial.printf("Open browser: http://%s\n", IP.toString().c_str());
+    Serial.printf("Telnet logging: telnet %s 23\n", IP.toString().c_str());
+
+    // Start telnet server
+    telnetServer.begin();
+    telnetServer.setNoDelay(true);
+    Serial.println("✓ Telnet server started on port 23");
   }
   else
   {
@@ -2043,6 +2174,9 @@ void loop()
 {
   // OTA DISABLED - ArduinoOTA.handle() removed to prevent mutex conflicts
 
+  // Check for telnet clients
+  checkTelnetClient();
+
   // Clean up WebSocket clients
   static uint32_t lastWSCleanup = 0;
   if (millis() - lastWSCleanup > 5000) // Every 5 seconds only
@@ -2080,11 +2214,11 @@ void loop()
     float lowestV = getLowestCellVoltage();
     float highestV = getHighestCellVoltage();
 
-    Serial.printf("Status: %s | Mode: %s | Cells: %.3fV-%.3fV (Δ%.1fmV)\n",
-                  balancingActive ? "BALANCING" : "GATEWAY",
-                  manualMode ? "MANUAL" : "AUTO",
-                  lowestV, highestV,
-                  (highestV - lowestV) * 1000.0f);
+    telnetPrintf("Status: %s | Mode: %s | Cells: %.3fV-%.3fV (Δ%.1fmV)\n",
+                 balancingActive ? "BALANCING" : "GATEWAY",
+                 manualMode ? "MANUAL" : "AUTO",
+                 lowestV, highestV,
+                 (highestV - lowestV) * 1000.0f);
   }
 
   // Minimal delay - maximize CAN throughput
