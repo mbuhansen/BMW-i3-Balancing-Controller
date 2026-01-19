@@ -1067,7 +1067,19 @@ void performBroadcast()
   }
   else if (balancingActive)
   {
-    status = "BALANCING";
+    if (balancingPaused)
+    {
+      status = "BALANCING (PAUSED)";
+    }
+    else
+    {
+      status = "BALANCING";
+    }
+  }
+  else if (balancingCooldownStartTime > 0)
+  {
+    unsigned long remainingCooldown = (BALANCING_COOLDOWN_MS - (millis() - balancingCooldownStartTime)) / 1000 / 60;
+    status = "COOLDOWN (" + String(remainingCooldown) + "m)";
   }
   else
   {
