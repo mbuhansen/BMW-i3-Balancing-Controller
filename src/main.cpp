@@ -88,7 +88,7 @@ BMWModule modules[MAX_MODULES];
 bool balancingActive = false;
 bool manualMode = true;  // Start in MANUAL mode - gateway mode, no automatic balancing
 bool autoModeAtStartup = false; // Setting: Start in Auto mode?
-bool mqttEnabled = true; // Setting: Enable/Disable MQTT
+bool mqttEnabled = false; // Setting: Enable/Disable MQTT
 bool gatewayMode = true; // GATEWAY: Forward messages between BMS and slave modules
 bool externalMasterDetected = false;
 bool canDebugTwaiEnabled = false;    // TWAI (BMS) debug logging - DISABLED by default
@@ -1199,6 +1199,7 @@ void performBroadcast()
   doc["balanceHysteresisMv"] = balanceHysteresisMv;
   doc["controllerSuffix"] = controllerSuffix;
   doc["autoModeAtStartup"] = autoModeAtStartup;
+  doc["mqttEnabled"] = mqttEnabled;
 
   JsonArray modulesArray = doc["modules"].to<JsonArray>();
 
@@ -1879,6 +1880,9 @@ const char index_html[] PROGMEM = R"rawliteral(
             }
             if (data.autoModeAtStartup !== undefined) {
                  document.getElementById('autoModeAtStartup').checked = data.autoModeAtStartup;
+            }
+            if (data.mqttEnabled !== undefined) {
+                 document.getElementById('mqttEnabled').checked = data.mqttEnabled;
             }
             
             // Update LED indicator
