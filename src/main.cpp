@@ -86,6 +86,7 @@ struct BMWModule
 BMWModule modules[MAX_MODULES];
 bool balancingActive = false;
 bool manualMode = true;  // Start in MANUAL mode - gateway mode, no automatic balancing
+bool autoModeAtStartup = false; // Setting: Start in Auto mode?
 bool gatewayMode = true; // GATEWAY: Forward messages between BMS and slave modules
 bool externalMasterDetected = false;
 bool canDebugTwaiEnabled = false;    // TWAI (BMS) debug logging - DISABLED by default
@@ -918,6 +919,13 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
             Serial.printf("Controller suffix set to %s\n", controllerSuffix.c_str());
             changed = true;
           }
+          if (doc["autoModeAtStartup"].is<bool>())
+          {
+             autoModeAtStartup = doc["autoModeAtStartup"];
+             preferences.putBool("autoStart", autoModeAtStartup);
+             Serial.printf("Auto Start set to %s\n", autoModeAtStartup ? "YES" : "NO");
+             changed = true;
+          }
 
           if (changed)
           {
@@ -1014,6 +1022,7 @@ void performBroadcast()
   doc["balanceThresholdMv"] = balanceThresholdMv;
   doc["balanceHysteresisMv"] = balanceHysteresisMv;
   doc["controllerSuffix"] = controllerSuffix;
+  doc["autoModeAtStartup"] = autoModeAtStartup;
 
   JsonArray modulesArray = doc["modules"].to<JsonArray>();
 
@@ -1613,6 +1622,15 @@ const char index_html[] PROGMEM = R"rawliteral(
                             <input type="text" id="controllerSuffix" placeholder="e.g. 1" maxlength="5">
                         </div>
                     </div>
+                    <div class="setting-item">
+                        <div class="setting-label">Auto Mode at Startup</div>
+                        <div class="setting-input-group">
+                            <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                <input type="checkbox" id="autoModeAtStartup" style="width: 20px; height: 20px;">
+                                <span style="font-size: 0.9em; opacity: 0.8;">Enable Auto Mode on boot</span>
+                            </label>
+                        </div>
+                    </div>
                 </div>
                 
                 <div style="display: flex; justify-content: center; margin-top: 15px;">
@@ -1673,6 +1691,9 @@ const char index_html[] PROGMEM = R"rawliteral(
                 const suffix = data.controllerSuffix ? ' ' + data.controllerSuffix : '';
                 document.title = 'BMW i3 Balancing Controller' + suffix;
                 document.getElementById('titleSuffix').textContent = data.controllerSuffix;
+            }
+            if (data.autoModeAtStartup !== undefined) {
+                 document.getElementById('autoModeAtStartup').checked = data.autoModeAtStartup;
             }
             
             // Update LED indicator
@@ -1907,6 +1928,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             const balanceThreshold = parseFloat(document.getElementById('balanceThreshold').value);
             const balanceHysteresis = parseFloat(document.getElementById('balanceHysteresis').value);
             const controllerSuffix = document.getElementById('controllerSuffix').value;
+            const autoModeAtStartup = document.getElementById('autoModeAtStartup').checked;
             
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
@@ -1914,7 +1936,8 @@ const char index_html[] PROGMEM = R"rawliteral(
                     minBalanceVoltage: minBalanceVoltage,
                     balanceThreshold: balanceThreshold,
                     balanceHysteresis: balanceHysteresis,
-                    controllerSuffix: controllerSuffix
+                    controllerSuffix: controllerSuffix,
+                    autoModeAtStartup: autoModeAtStartup
                 }));
                 
                 // Visual feedback
@@ -2031,11 +2054,19 @@ void setup()
   balanceThresholdMv = preferences.getFloat("threshold", 10.0f);
   balanceHysteresisMv = preferences.getFloat("hysteresis", 5.0f);
   controllerSuffix = preferences.getString("suffix", "");
+  autoModeAtStartup = preferences.getBool("autoStart", false);
+
+  // Apply auto mode at startup if enabled
+  if (autoModeAtStartup) {
+    manualMode = false;
+  }
+
   Serial.printf("Settings loaded from flash:\n");
   Serial.printf("- Min Voltage: %.2fV\n", minBalanceVoltage);
   Serial.printf("- Threshold: %.0fmV\n", balanceThresholdMv);
   Serial.printf("- Hysteresis: %.0fmV\n", balanceHysteresisMv);
   Serial.printf("- Suffix: '%s'\n", controllerSuffix.c_str());
+  Serial.printf("- Auto Start: %s\n", autoModeAtStartup ? "YES" : "NO");
 
   Serial.println("\n\n=================================");
   Serial.println("BMW i3 Balancing Controller");
