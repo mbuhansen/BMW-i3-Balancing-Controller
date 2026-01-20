@@ -88,8 +88,9 @@ BMWModule modules[MAX_MODULES];
 bool balancingActive = false;
 bool manualMode = true;  // Start in MANUAL mode - gateway mode, no automatic balancing
 bool autoModeAtStartup = false; // Setting: Start in Auto mode?
-bool mqttEnabled = false; // Setting: Enable/Disable MQTT
 bool gatewayMode = true; // GATEWAY: Forward messages between BMS and slave modules
+bool mqttEnabled = false; // Setting: Enable/Disable MQTT
+bool balancingFeedbackLimit = false; // Setting: Stop balancing if no feedback (0x10X)
 bool externalMasterDetected = false;
 bool canDebugTwaiEnabled = false;    // TWAI (BMS) debug logging - DISABLED by default
 bool canDebugMcp2515Enabled = false; // MCP2515 (slave modules) debug logging - DISABLED by default
@@ -127,18 +128,16 @@ AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 Preferences preferences;
 
-// Telnet server for remote logging (Port 23)
-WiFiServer telnetServer(23);
-WiFiClient telnetClient;
-bool telnetConnected = false;
-
-// MQTT Configuration is now in credentials.h
-
 // MQTT Client
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 unsigned long lastMqttPublish = 0;
-const unsigned long MQTT_PUBLISH_INTERVAL = 5000; // Publish every 5 seconds
+const unsigned long MQTT_PUBLISH_INTERVAL = 5000;
+
+// Telnet server for remote logging (Port 23)
+WiFiServer telnetServer(23);
+WiFiClient telnetClient;
+bool telnetConnected = false;
 
 // Telnet logging functions
 void telnetPrint(const char *str)
@@ -239,7 +238,15 @@ void reconnectMQTT()
 
   if (!mqttClient.connected())
   {
-    if (mqttClient.connect("BMW-i3-BMS", MQTT_USER, MQTT_PASSWORD))
+    bool connected = false;
+    // Check if MQTT credentials are provided
+    if (String(MQTT_USER).length() > 0) {
+       connected = mqttClient.connect("BMW-i3-BMS", MQTT_USER, MQTT_PASSWORD);
+    } else {
+       connected = mqttClient.connect("BMW-i3-BMS");
+    }
+
+    if (connected)
     {
       telnetPrintln("MQTT Connected");
       mqttClient.publish("bmw_i3_bms/status", "online");
@@ -930,7 +937,7 @@ void updateBalancing()
   }
 
   // Check timeout while balancing active
-  if (balancingActive)
+  if (balancingActive && balancingFeedbackLimit)
   {
     if (millis() - lastBalancingFeedbackTime > BALANCING_TIMEOUT_MS)
     {
@@ -1083,6 +1090,13 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
              Serial.printf("Auto Start set to %s\n", autoModeAtStartup ? "YES" : "NO");
              changed = true;
           }
+           if (doc["balancingFeedbackLimit"].is<bool>())
+          {
+             balancingFeedbackLimit = doc["balancingFeedbackLimit"];
+             preferences.putBool("feedbackLimit", balancingFeedbackLimit);
+             Serial.printf("Feedback Limit set to %s\n", balancingFeedbackLimit ? "YES" : "NO");
+             changed = true;
+          }
           if (doc["mqttEnabled"].is<bool>())
           {
              mqttEnabled = doc["mqttEnabled"];
@@ -1200,6 +1214,7 @@ void performBroadcast()
   doc["controllerSuffix"] = controllerSuffix;
   doc["autoModeAtStartup"] = autoModeAtStartup;
   doc["mqttEnabled"] = mqttEnabled;
+  doc["balancingFeedbackLimit"] = balancingFeedbackLimit;
 
   JsonArray modulesArray = doc["modules"].to<JsonArray>();
 
@@ -1809,6 +1824,15 @@ const char index_html[] PROGMEM = R"rawliteral(
                         </div>
                     </div>
                     <div class="setting-item">
+                        <div class="setting-label">Feedback Timeout</div>
+                        <div class="setting-input-group">
+                            <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                <input type="checkbox" id="balancingFeedbackLimit" style="width: 20px; height: 20px;">
+                                <span style="font-size: 0.9em; opacity: 0.8;">Stop if 15m without feedback</span>   
+                            </label>
+                        </div>
+                    </div>
+                    <div class="setting-item">
                         <div class="setting-label">MQTT Integration</div>
                         <div class="setting-input-group">
                             <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
@@ -1880,6 +1904,9 @@ const char index_html[] PROGMEM = R"rawliteral(
             }
             if (data.autoModeAtStartup !== undefined) {
                  document.getElementById('autoModeAtStartup').checked = data.autoModeAtStartup;
+            }
+            if (data.balancingFeedbackLimit !== undefined) {
+                 document.getElementById('balancingFeedbackLimit').checked = data.balancingFeedbackLimit;
             }
             if (data.mqttEnabled !== undefined) {
                  document.getElementById('mqttEnabled').checked = data.mqttEnabled;
@@ -2118,6 +2145,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             const balanceHysteresis = parseFloat(document.getElementById('balanceHysteresis').value);
             const controllerSuffix = document.getElementById('controllerSuffix').value;
             const autoModeAtStartup = document.getElementById('autoModeAtStartup').checked;
+            const balancingFeedbackLimit = document.getElementById('balancingFeedbackLimit').checked;
             const mqttEnabled = document.getElementById('mqttEnabled').checked;
             
             if (ws && ws.readyState === WebSocket.OPEN) {
@@ -2128,6 +2156,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                     balanceHysteresis: balanceHysteresis,
                     controllerSuffix: controllerSuffix,
                     autoModeAtStartup: autoModeAtStartup,
+                    balancingFeedbackLimit: balancingFeedbackLimit,
                     mqttEnabled: mqttEnabled
                 }));
                 
@@ -2246,7 +2275,8 @@ void setup()
   balanceHysteresisMv = preferences.getFloat("hysteresis", 5.0f);
   controllerSuffix = preferences.getString("suffix", "");
   autoModeAtStartup = preferences.getBool("autoStart", false);
-  mqttEnabled = preferences.getBool("mqttEnabled", true);
+  mqttEnabled = preferences.getBool("mqttEnabled", false);
+  balancingFeedbackLimit = preferences.getBool("feedbackLimit", false);
 
   // Apply auto mode at startup if enabled
   if (autoModeAtStartup) {
@@ -2260,6 +2290,7 @@ void setup()
   Serial.printf("- Suffix: '%s'\n", controllerSuffix.c_str());
   Serial.printf("- Auto Start: %s\n", autoModeAtStartup ? "YES" : "NO");
   Serial.printf("- MQTT Enabled: %s\n", mqttEnabled ? "YES" : "NO");
+  Serial.printf("- Feedback Limit: %s\n", balancingFeedbackLimit ? "YES" : "NO");
 
   Serial.println("\n\n=================================");
   Serial.println("BMW i3 Balancing Controller");
@@ -2320,6 +2351,10 @@ void setup()
   if (WiFi.status() == WL_CONNECTED)
   {
     Serial.println("\n✓ WiFi connected!");
+    
+    // Configure MQTT Server
+    mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+    
     IPAddress IP = WiFi.localIP();
     Serial.print("IP address: ");
     Serial.println(IP);
@@ -2402,10 +2437,11 @@ void loop()
   // OTA DISABLED - ArduinoOTA.handle() removed to prevent mutex conflicts
 
   // Process MQTT
-  processMQTT();
-
   // Check for telnet clients
   checkTelnetClient();
+
+  // Process MQTT
+  processMQTT();
 
   // Clean up WebSocket clients
   static uint32_t lastWSCleanup = 0;
