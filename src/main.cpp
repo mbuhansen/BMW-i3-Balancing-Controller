@@ -231,6 +231,96 @@ void checkTelnetClient()
   }
 }
 
+// MQTT Helper: Get base topic with suffix
+String getBaseTopic() {
+  String topic = "bmw_i3_bms";
+  if (controllerSuffix.length() > 0) {
+    topic += "_" + controllerSuffix;
+  }
+  return topic;
+}
+
+// MQTT Helper: Send Home Assistant Discovery payloads
+void sendHADiscovery() {
+  String nodeId = "bmw_i3_bms";
+  String deviceName = "BMW i3 BMS";
+  if (controllerSuffix.length() > 0) {
+    nodeId += "_" + controllerSuffix;
+    deviceName += " " + controllerSuffix;
+  }
+
+  String baseTopic = getBaseTopic();
+  String stateTopic = baseTopic + "/metrics";
+
+  // Common device config
+  JsonObject deviceParams; // Use object inside the loop directly or helper
+  
+  // Define sensors to discover
+  struct SensorConfig {
+    const char* id;
+    const char* name;
+    const char* unit;
+    const char* devClass;
+    const char* valueTpl;
+  };
+
+  SensorConfig sensors[] = {
+    {"volt_min", "Lowest Voltage", "V", "voltage", "{{ value_json.voltage_lowest }}"},
+    {"volt_max", "Highest Voltage", "V", "voltage", "{{ value_json.voltage_highest }}"},
+    {"volt_diff", "Cell Diff", "mV", "voltage", "{{ value_json.voltage_diff_mv }}"},
+    {"modules", "Modules Detected", "", "", "{{ value_json.modules_detected }}"},
+    {"status", "Status", "", "", "{{ value_json.status }}"}
+  };
+
+  for (const auto& s : sensors) {
+    JsonDocument doc;
+    doc["name"] = s.name;
+    doc["stat_t"] = stateTopic;
+    doc["val_tpl"] = s.valueTpl;
+    if (strlen(s.unit) > 0) doc["unit_of_meas"] = s.unit;
+    if (strlen(s.devClass) > 0) doc["dev_cla"] = s.devClass;
+    doc["uniq_id"] = nodeId + "_" + s.id;
+    
+    JsonObject dev = doc["dev"].to<JsonObject>();
+    dev["ids"] = nodeId;
+    dev["name"] = deviceName;
+    dev["mf"] = "BMW/LilyGO";
+    dev["mdl"] = "T-2CAN";
+    dev["sw"] = "1.2";
+
+    String topic = "homeassistant/sensor/" + nodeId + "/" + s.id + "/config";
+    char buffer[512];
+    serializeJson(doc, buffer);
+    mqttClient.publish(topic.c_str(), buffer, true);
+    delay(10); // Slack for network
+  }
+  
+  // Binary Sensor: Active
+  {
+    JsonDocument doc;
+    doc["name"] = "Balancing Active";
+    doc["stat_t"] = stateTopic;
+    doc["val_tpl"] = "{{ value_json.active }}";
+    doc["pl_on"] = "true";
+    doc["pl_off"] = "false";
+    doc["uniq_id"] = nodeId + "_active";
+    
+    JsonObject dev = doc["dev"].to<JsonObject>();
+    dev["ids"] = nodeId;
+    dev["name"] = deviceName;
+    dev["mf"] = "BMW/LilyGO";
+    dev["mdl"] = "T-2CAN";
+    dev["sw"] = "1.2";
+    
+    String topic = "homeassistant/binary_sensor/" + nodeId + "/active/config";
+    char buffer[512];
+    serializeJson(doc, buffer);
+    mqttClient.publish(topic.c_str(), buffer, true);
+  }
+
+  telnetPrintln("MQTT: Sent Home Assistant Discovery payloads");
+}
+
 // MQTT Functions
 void reconnectMQTT()
 {
@@ -239,17 +329,26 @@ void reconnectMQTT()
   if (!mqttClient.connected())
   {
     bool connected = false;
+
+    // Construct unique Client ID based on suffix
+    String clientId = "BMW-i3-BMS";
+    if (controllerSuffix.length() > 0) {
+        clientId += "-" + controllerSuffix;
+    }
+
     // Check if MQTT credentials are provided
     if (String(MQTT_USER).length() > 0) {
-       connected = mqttClient.connect("BMW-i3-BMS", MQTT_USER, MQTT_PASSWORD);
+       connected = mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASSWORD);
     } else {
-       connected = mqttClient.connect("BMW-i3-BMS");
+       connected = mqttClient.connect(clientId.c_str());
     }
 
     if (connected)
     {
       telnetPrintln("MQTT Connected");
-      mqttClient.publish("bmw_i3_bms/status", "online");
+      String statusTopic = getBaseTopic() + "/status";
+      mqttClient.publish(statusTopic.c_str(), "online");
+      sendHADiscovery();
     }
   }
 }
@@ -302,7 +401,9 @@ void processMQTT()
 
       char buffer[512];
       serializeJson(doc, buffer);
-      mqttClient.publish("bmw_i3_bms/metrics", buffer);
+      
+      String topic = getBaseTopic() + "/metrics";
+      mqttClient.publish(topic.c_str(), buffer);
     }
   }
 }
