@@ -6,6 +6,7 @@
 #include <ArduinoOTA.h>
 #include <Update.h>
 #include <Preferences.h>
+#include <PubSubClient.h>
 
 #include "driver/twai.h"
 #include "can_dual_setup.h" // MCP2515 dual CAN
@@ -88,6 +89,8 @@ bool balancingActive = false;
 bool manualMode = true;  // Start in MANUAL mode - gateway mode, no automatic balancing
 bool autoModeAtStartup = false; // Setting: Start in Auto mode?
 bool gatewayMode = true; // GATEWAY: Forward messages between BMS and slave modules
+bool mqttEnabled = false; // Setting: Enable/Disable MQTT
+bool balancingFeedbackLimit = false; // Setting: Stop balancing if no feedback (0x10X)
 bool externalMasterDetected = false;
 bool canDebugTwaiEnabled = false;    // TWAI (BMS) debug logging - DISABLED by default
 bool canDebugMcp2515Enabled = false; // MCP2515 (slave modules) debug logging - DISABLED by default
@@ -124,6 +127,12 @@ float getHighestCellVoltage();
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 Preferences preferences;
+
+// MQTT Client
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
+unsigned long lastMqttPublish = 0;
+const unsigned long MQTT_PUBLISH_INTERVAL = 5000;
 
 // Telnet server for remote logging (Port 23)
 WiFiServer telnetServer(23);
@@ -218,6 +227,82 @@ void checkTelnetClient()
       Serial.println("[Telnet] Client disconnected");
       telnetClient.stop();
       telnetConnected = false;
+    }
+  }
+}
+
+// MQTT Functions
+void reconnectMQTT()
+{
+  if (!mqttEnabled) return;
+
+  if (!mqttClient.connected())
+  {
+    bool connected = false;
+    // Check if MQTT credentials are provided
+    if (String(MQTT_USER).length() > 0) {
+       connected = mqttClient.connect("BMW-i3-BMS", MQTT_USER, MQTT_PASSWORD);
+    } else {
+       connected = mqttClient.connect("BMW-i3-BMS");
+    }
+
+    if (connected)
+    {
+      telnetPrintln("MQTT Connected");
+      mqttClient.publish("bmw_i3_bms/status", "online");
+    }
+  }
+}
+
+void processMQTT()
+{
+  if (!mqttEnabled) return;
+
+  if (WiFi.status() != WL_CONNECTED)
+    return;
+
+  if (!mqttClient.connected())
+  {
+    static unsigned long lastReconnectAttempt = 0;
+    if (millis() - lastReconnectAttempt > 5000)
+    {
+      lastReconnectAttempt = millis();
+      reconnectMQTT();
+    }
+  }
+  else
+  {
+    mqttClient.loop();
+
+    if (millis() - lastMqttPublish > MQTT_PUBLISH_INTERVAL)
+    {
+      lastMqttPublish = millis();
+      
+      // Publish Status
+      JsonDocument doc;
+      
+      // Basic Status
+      doc["status"] = balancingActive ? (balancingPaused ? "BALANCING_PAUSED" : "BALANCING") : "IDLE";
+      if (balancingCooldownStartTime > 0) doc["status"] = "COOLDOWN";
+      
+      doc["manual_mode"] = manualMode;
+      doc["gateway_mode"] = gatewayMode;
+      doc["active"] = balancingActive;
+      
+      float lowest = getLowestCellVoltage();
+      float highest = getHighestCellVoltage();
+      
+      doc["voltage_lowest"] = lowest;
+      doc["voltage_highest"] = highest;
+      doc["voltage_diff_mv"] = (highest - lowest) * 1000.0f;
+      
+      int modulesDetected = 0;
+      for(int i=0; i<MAX_MODULES; i++) if(modules[i].exists) modulesDetected++;
+      doc["modules_detected"] = modulesDetected;
+
+      char buffer[512];
+      serializeJson(doc, buffer);
+      mqttClient.publish("bmw_i3_bms/metrics", buffer);
     }
   }
 }
@@ -860,7 +945,7 @@ void updateBalancing()
   }
 
   // Check timeout while balancing active
-  if (balancingActive)
+  if (balancingActive && balancingFeedbackLimit)
   {
     if (millis() - lastBalancingFeedbackTime > BALANCING_TIMEOUT_MS)
     {
@@ -1013,6 +1098,20 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
              Serial.printf("Auto Start set to %s\n", autoModeAtStartup ? "YES" : "NO");
              changed = true;
           }
+           if (doc["balancingFeedbackLimit"].is<bool>())
+          {
+             balancingFeedbackLimit = doc["balancingFeedbackLimit"];
+             preferences.putBool("feedbackLimit", balancingFeedbackLimit);
+             Serial.printf("Feedback Limit set to %s\n", balancingFeedbackLimit ? "YES" : "NO");
+             changed = true;
+          }
+          if (doc["mqttEnabled"].is<bool>())
+          {
+             mqttEnabled = doc["mqttEnabled"];
+             preferences.putBool("mqttEnabled", mqttEnabled);
+             Serial.printf("MQTT Enabled set to %s\n", mqttEnabled ? "YES" : "NO");
+             changed = true;
+          }
 
           if (changed)
           {
@@ -1126,6 +1225,8 @@ void performBroadcast()
   doc["balanceHysteresisMv"] = balanceHysteresisMv;
   doc["controllerSuffix"] = controllerSuffix;
   doc["autoModeAtStartup"] = autoModeAtStartup;
+  doc["mqttEnabled"] = mqttEnabled;
+  doc["balancingFeedbackLimit"] = balancingFeedbackLimit;
 
   JsonArray modulesArray = doc["modules"].to<JsonArray>();
 
@@ -1734,8 +1835,26 @@ const char index_html[] PROGMEM = R"rawliteral(
                             </label>
                         </div>
                     </div>
+                    <div class="setting-item">
+                        <div class="setting-label">Feedback Timeout</div>
+                        <div class="setting-input-group">
+                            <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                <input type="checkbox" id="balancingFeedbackLimit" style="width: 20px; height: 20px;">
+                                <span style="font-size: 0.9em; opacity: 0.8;">Stop if 15m without feedback</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-label">MQTT Integration</div>
+                        <div class="setting-input-group">
+                            <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                <input type="checkbox" id="mqttEnabled" style="width: 20px; height: 20px;">
+                                <span style="font-size: 0.9em; opacity: 0.8;">Enable MQTT Reporting</span>
+                            </label>
+                        </div>
+                    </div>
                 </div>
-                
+
                 <div style="display: flex; justify-content: center; margin-top: 15px;">
                     <button onclick="updateSettings()">💾 Save Settings</button>
                 </div>
@@ -1797,6 +1916,12 @@ const char index_html[] PROGMEM = R"rawliteral(
             }
             if (data.autoModeAtStartup !== undefined) {
                  document.getElementById('autoModeAtStartup').checked = data.autoModeAtStartup;
+            }
+            if (data.balancingFeedbackLimit !== undefined) {
+                 document.getElementById('balancingFeedbackLimit').checked = data.balancingFeedbackLimit;
+            }
+            if (data.mqttEnabled !== undefined) {
+                 document.getElementById('mqttEnabled').checked = data.mqttEnabled;
             }
             
             // Update LED indicator
@@ -1974,10 +2099,16 @@ const char index_html[] PROGMEM = R"rawliteral(
             
             if (allCells.length === 0) return;
             
-            // Find min and max voltages
-            const voltages = allCells.map(c => c.voltage);
-            const minVoltage = Math.min(...voltages);
-            const maxVoltage = Math.max(...voltages);
+            // Calculate stats for scaling and highlighting separately
+            // Ignore Module 8 Cell 12 (m=8, c=12) for highlighting statistics
+            const validCells = allCells.filter(c => !(c.moduleId === 8 && c.cellIndex === 12));
+            
+            // If no valid cells (unlikely), fallback to all cells
+            const cellsForStats = validCells.length > 0 ? validCells : allCells;
+            const validVoltages = cellsForStats.map(c => c.voltage);
+            
+            const minVoltage = Math.min(...validVoltages);
+            const maxVoltage = Math.max(...validVoltages);
             const voltageRange = maxVoltage - minVoltage;
             
             // Create bars for each cell
@@ -1985,23 +2116,36 @@ const char index_html[] PROGMEM = R"rawliteral(
                 const bar = document.createElement('div');
                 bar.className = 'cell-bar';
                 
-                // Calculate height (percentage of max voltage)
-                const heightPercent = voltageRange > 0 
-                    ? ((cell.voltage - minVoltage) / voltageRange) * 100 
-                    : 100;
-                bar.style.height = Math.max(5, heightPercent) + '%';
+                // Calculate height relative to the VALID voltage range
+                // If the ignored cell is out of range, clamp it to 5% min height
+                let heightPercent = 100;
+                if (voltageRange > 0) {
+                    heightPercent = ((cell.voltage - minVoltage) / voltageRange) * 100;
+                }
+                bar.style.height = Math.max(5, Math.min(100, heightPercent)) + '%';
                 
-                // Highlight lowest and highest
-                if (cell.voltage === minVoltage) {
-                    bar.classList.add('lowest');
-                } else if (cell.voltage === maxVoltage) {
-                    bar.classList.add('highest');
+                // Check if this cell is the ignored one
+                const isIgnored = (cell.moduleId === 8 && cell.cellIndex === 12);
+                
+                // Highlight lowest and highest - ONLY if not the ignored cell
+                if (!isIgnored) {
+                    if (cell.voltage <= minVoltage + 0.001) { // Fuzzy match for float
+                        bar.classList.add('lowest');
+                    } else if (cell.voltage >= maxVoltage - 0.001) {
+                        bar.classList.add('highest');
+                    }
+                } else {
+                    // Optional: distinct visual style for ignored cell?
+                    bar.style.opacity = '0.7'; 
+                    bar.style.background = '#888'; // Greyout
                 }
                 
                 // Add tooltip
                 const tooltip = document.createElement('div');
                 tooltip.className = 'cell-bar-tooltip';
-                tooltip.textContent = `M${cell.moduleId} C${cell.cellIndex}: ${cell.voltage.toFixed(3)}V`;
+                let tooltipText = `M${cell.moduleId} C${cell.cellIndex}: ${cell.voltage.toFixed(3)}V`;
+                if (isIgnored) tooltipText += ' (Ignored)';
+                tooltip.textContent = tooltipText;
                 bar.appendChild(tooltip);
                 
                 chartContainer.appendChild(bar);
@@ -2032,6 +2176,8 @@ const char index_html[] PROGMEM = R"rawliteral(
             const balanceHysteresis = parseFloat(document.getElementById('balanceHysteresis').value);
             const controllerSuffix = document.getElementById('controllerSuffix').value;
             const autoModeAtStartup = document.getElementById('autoModeAtStartup').checked;
+            const balancingFeedbackLimit = document.getElementById('balancingFeedbackLimit').checked;
+            const mqttEnabled = document.getElementById('mqttEnabled').checked;
             
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
@@ -2040,7 +2186,9 @@ const char index_html[] PROGMEM = R"rawliteral(
                     balanceThreshold: balanceThreshold,
                     balanceHysteresis: balanceHysteresis,
                     controllerSuffix: controllerSuffix,
-                    autoModeAtStartup: autoModeAtStartup
+                    autoModeAtStartup: autoModeAtStartup,
+                    balancingFeedbackLimit: balancingFeedbackLimit,
+                    mqttEnabled: mqttEnabled
                 }));
                 
                 // Visual feedback
@@ -2158,6 +2306,8 @@ void setup()
   balanceHysteresisMv = preferences.getFloat("hysteresis", 5.0f);
   controllerSuffix = preferences.getString("suffix", "");
   autoModeAtStartup = preferences.getBool("autoStart", false);
+  mqttEnabled = preferences.getBool("mqttEnabled", false);
+  balancingFeedbackLimit = preferences.getBool("feedbackLimit", false);
 
   // Apply auto mode at startup if enabled
   if (autoModeAtStartup) {
@@ -2170,6 +2320,8 @@ void setup()
   Serial.printf("- Hysteresis: %.0fmV\n", balanceHysteresisMv);
   Serial.printf("- Suffix: '%s'\n", controllerSuffix.c_str());
   Serial.printf("- Auto Start: %s\n", autoModeAtStartup ? "YES" : "NO");
+  Serial.printf("- MQTT Enabled: %s\n", mqttEnabled ? "YES" : "NO");
+  Serial.printf("- Feedback Limit: %s\n", balancingFeedbackLimit ? "YES" : "NO");
 
   Serial.println("\n\n=================================");
   Serial.println("BMW i3 Balancing Controller");
@@ -2230,6 +2382,10 @@ void setup()
   if (WiFi.status() == WL_CONNECTED)
   {
     Serial.println("\n✓ WiFi connected!");
+    
+    // Configure MQTT Server
+    mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+    
     IPAddress IP = WiFi.localIP();
     Serial.print("IP address: ");
     Serial.println(IP);
@@ -2310,6 +2466,9 @@ void loop()
 
   // Check for telnet clients
   checkTelnetClient();
+
+  // Process MQTT
+  processMQTT();
 
   // Clean up WebSocket clients
   static uint32_t lastWSCleanup = 0;
