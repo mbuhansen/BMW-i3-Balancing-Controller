@@ -498,13 +498,13 @@ void printCANMessage(const twai_message_t &msg, bool isTX)
   char direction[4];
   strcpy(direction, isTX ? "TX" : "RX");
 
-  telnetPrintf("[TWAI %s] 0x%03X [%d] ", direction, msg.identifier, msg.data_length_code);
+  Serial.printf("[TWAI %s] 0x%03X [%d] ", direction, msg.identifier, msg.data_length_code);
 
   for (int i = 0; i < msg.data_length_code; i++)
   {
-    telnetPrintf("%02X ", msg.data[i]);
+    Serial.printf("%02X ", msg.data[i]);
   }
-  telnetPrintln("");
+  Serial.println("");
 }
 
 // Parse incoming CAN messages from slave modules
@@ -780,12 +780,12 @@ void readCANMessages()
         // Debug output for forwarding
         if (canDebugTwaiEnabled)
         {
-          telnetPrintf("[TWAI    TX] 0x%03X [%d] ", forward_msg.identifier, forward_msg.data_length_code);
+          Serial.printf("[TWAI    TX] 0x%03X [%d] ", forward_msg.identifier, forward_msg.data_length_code);
           for (int i = 0; i < forward_msg.data_length_code; i++)
           {
-            telnetPrintf("%02X ", forward_msg.data[i]);
+            Serial.printf("%02X ", forward_msg.data[i]);
           }
-          telnetPrintf("%s\n", result == ESP_OK ? "OK" : "FAIL");
+          Serial.printf("%s\n", result == ESP_OK ? "OK" : "FAIL");
         }
       }
     }
@@ -807,12 +807,12 @@ void readCANMessages()
       if (millis() - lastTwaiDebug > 200) // Only every 200ms
       {
         lastTwaiDebug = millis();
-        telnetPrintf("[TWAI    RX] 0x%03X [%d] ", id, twai_msg.data_length_code);
+        Serial.printf("[TWAI    RX] 0x%03X [%d] ", id, twai_msg.data_length_code);
         for (int i = 0; i < twai_msg.data_length_code; i++)
         {
-          telnetPrintf("%02X ", twai_msg.data[i]);
+          Serial.printf("%02X ", twai_msg.data[i]);
         }
-        telnetPrintln("");
+        Serial.println("");
       }
     }
 
