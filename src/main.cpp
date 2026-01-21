@@ -847,7 +847,7 @@ void readCANMessages()
       {
         uint16_t rawVoltage = twai_msg.data[0] | (twai_msg.data[1] << 8);
         bmsTargetVoltage = rawVoltage / 1000.0f; // Convert to volts
-        activeTargetVoltage = bmsTargetVoltage;  // Default: use BMS target
+        // activeTargetVoltage = bmsTargetVoltage;  // Default removed by user request
       }
 
       // Forward BMS requests to slave modules via MCP2515
@@ -1059,6 +1059,12 @@ void updateBalancing()
   }
 
   float lowestVoltage = getLowestCellVoltage();
+  
+  // Always update active target to lowest + 2mV (User Request)
+  if (lowestVoltage > 0.5f) {
+      activeTargetVoltage = lowestVoltage + 0.002f;
+  }
+
   float highestVoltage = getHighestCellVoltage();
   float difference_mV = (highestVoltage - lowestVoltage) * 1000.0f;
 
