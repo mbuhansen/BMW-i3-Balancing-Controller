@@ -147,12 +147,12 @@ inline bool sendCAN2(uint32_t id, uint8_t len, uint8_t *data)
     if (millis() - lastDebug > 200 || !success)
     { // Only every 200ms or on failure
       lastDebug = millis();
-      telnetPrintf("[MCP2515 TX] 0x%03X [%d] ", id, len);
+      Serial.printf("[MCP2515 TX] 0x%03X [%d] ", id, len);
       for (int i = 0; i < len; i++)
       {
-        telnetPrintf("%02X ", data[i]);
+        Serial.printf("%02X ", data[i]);
       }
-      telnetPrintf("%s (%lu total)\n", success ? "OK" : "FAIL", ++debugCount);
+      Serial.printf("%s (%lu total)\n", success ? "OK" : "FAIL", ++debugCount);
     }
   }
 
@@ -177,12 +177,12 @@ inline bool readCAN2(uint32_t &id, uint8_t &len, uint8_t *data)
     // Debug output for RX (always show to debug slave responses)
     if (canDebugMcp2515Enabled)
     {
-      telnetPrintf("[MCP2515 RX] 0x%03X [%d] ", id, len);
+      Serial.printf("[MCP2515 RX] 0x%03X [%d] ", id, len);
       for (int i = 0; i < len; i++)
       {
-        telnetPrintf("%02X ", data[i]);
+        Serial.printf("%02X ", data[i]);
       }
-      telnetPrintln("");
+      Serial.println("");
     }
 
     return true;
