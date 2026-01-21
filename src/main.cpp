@@ -2164,10 +2164,10 @@ const char index_html[] PROGMEM = R"rawliteral(
             });
             
             // Update cell voltage chart
-            updateCellChart(data.modules);
+            updateCellChart(data.modules, data);
         }
         
-        function updateCellChart(modules) {
+        function updateCellChart(modules, data) {
             const chartContainer = document.getElementById('cellChart');
             chartContainer.innerHTML = '';
             
@@ -2220,7 +2220,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             
             // Update chart info
             const chartInfo = document.getElementById('chartInfo');
-            chartInfo.textContent = `${allCells.length} cells | Range: ${minVoltage.toFixed(3)}V - ${maxVoltage.toFixed(3)}V | Δ${(voltageRange * 1000).toFixed(1)}mV`;
+            chartInfo.textContent = `Range: ${minVoltage.toFixed(3)}V - ${maxVoltage.toFixed(3)}V | Δ${(voltageRange * 1000).toFixed(1)}mV | Status: ${data.status} | Target: ${data.activeTargetVoltage.toFixed(3)}V`;
         }
         
         function sendCommand(cmd) {
