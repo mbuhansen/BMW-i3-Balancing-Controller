@@ -268,7 +268,6 @@ void sendHADiscovery() {
     {"volt_min", "Lowest Voltage", "V", "voltage", "{{ value_json.voltage_lowest }}"},
     {"volt_max", "Highest Voltage", "V", "voltage", "{{ value_json.voltage_highest }}"},
     {"volt_diff", "Cell Diff", "mV", "voltage", "{{ value_json.voltage_diff_mv }}"},
-    {"modules", "Modules Detected", "", "", "{{ value_json.modules_detected }}"},
     {"status", "Status", "", "", "{{ value_json.status }}"}
   };
 
@@ -295,15 +294,15 @@ void sendHADiscovery() {
     delay(10); // Slack for network
   }
   
-  // Binary Sensor: Active
+  // Binary Sensor: Auto Mode
   {
     JsonDocument doc;
-    doc["name"] = "Balancing Active";
+    doc["name"] = "Auto Mode";
     doc["stat_t"] = stateTopic;
-    doc["val_tpl"] = "{{ value_json.active }}";
+    doc["val_tpl"] = "{{ value_json.auto_mode }}";
     doc["pl_on"] = "true";
     doc["pl_off"] = "false";
-    doc["uniq_id"] = nodeId + "_active";
+    doc["uniq_id"] = nodeId + "_auto_mode";
     
     JsonObject dev = doc["dev"].to<JsonObject>();
     dev["ids"] = nodeId;
@@ -312,7 +311,7 @@ void sendHADiscovery() {
     dev["mdl"] = "T-2CAN";
     dev["sw"] = "1.2";
     
-    String topic = "homeassistant/binary_sensor/" + nodeId + "/active/config";
+    String topic = "homeassistant/binary_sensor/" + nodeId + "/auto_mode/config";
     char buffer[512];
     serializeJson(doc, buffer);
     mqttClient.publish(topic.c_str(), buffer, true);
@@ -384,9 +383,7 @@ void processMQTT()
       doc["status"] = balancingActive ? (balancingPaused ? "BALANCING_PAUSED" : "BALANCING") : "IDLE";
       if (balancingCooldownStartTime > 0) doc["status"] = "COOLDOWN";
       
-      doc["manual_mode"] = manualMode;
-      doc["gateway_mode"] = gatewayMode;
-      doc["active"] = balancingActive;
+      doc["auto_mode"] = !manualMode;
       
       float lowest = getLowestCellVoltage();
       float highest = getHighestCellVoltage();
@@ -395,10 +392,6 @@ void processMQTT()
       doc["voltage_highest"] = highest;
       doc["voltage_diff_mv"] = (highest - lowest) * 1000.0f;
       
-      int modulesDetected = 0;
-      for(int i=0; i<MAX_MODULES; i++) if(modules[i].exists) modulesDetected++;
-      doc["modules_detected"] = modulesDetected;
-
       char buffer[512];
       serializeJson(doc, buffer);
       
@@ -1283,7 +1276,11 @@ void performBroadcast()
   }
   else
   {
-    status = "GATEWAY";
+    if (!manualMode) {
+        status = "IDLE";
+    } else {
+        status = "GATEWAY";
+    }
   }
 
   // Determine mode
