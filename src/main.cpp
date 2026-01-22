@@ -268,7 +268,9 @@ void sendHADiscovery() {
     {"volt_min", "Lowest Voltage", "V", "voltage", "{{ value_json.voltage_lowest }}"},
     {"volt_max", "Highest Voltage", "V", "voltage", "{{ value_json.voltage_highest }}"},
     {"volt_diff", "Cell Diff", "mV", "voltage", "{{ value_json.voltage_diff_mv }}"},
-    {"status", "Status", "", "", "{{ value_json.status }}"}
+    {"status", "Status", "", "", "{{ value_json.status }}"},
+    {"mode", "Auto Mode", "", "", "{{ 'Auto' if value_json.auto_mode else 'Manual' }}"},
+    {"sys_stat", "System Status", "", "", "{{ value_json.system_status }}"}
   };
 
   for (const auto& s : sensors) {
@@ -288,9 +290,11 @@ void sendHADiscovery() {
     dev["sw"] = "1.2";
 
     String topic = "homeassistant/sensor/" + nodeId + "/" + s.id + "/config";
-    char buffer[512];
-    serializeJson(doc, buffer);
-    mqttClient.publish(topic.c_str(), buffer, true);
+    char buffer[1024];
+    size_t n = serializeJson(doc, buffer);
+    if (!mqttClient.publish(topic.c_str(), buffer, true)) {
+      telnetPrintf("MQTT: Failed to publish discovery for %s (len=%d)\n", s.id, n);
+    }
     delay(10); // Slack for network
   }
 
@@ -355,19 +359,33 @@ void processMQTT()
       
       // Publish Status
       JsonDocument doc;
+
+      // Check for errors (no modules detected after 5 seconds)
+      bool hasError = true;
+      for (int m = 0; m < MAX_MODULES; m++)
+      {
+        if (modules[m].exists && (millis() - modules[m].lastUpdate < 5000))
+        {
+          hasError = false;
+          break;
+        }
+      }
+      if (millis() < 5000) hasError = false;
       
       // Basic Status
       doc["status"] = balancingActive ? (balancingPaused ? "BALANCING_PAUSED" : "BALANCING") : "IDLE";
       if (balancingCooldownStartTime > 0) doc["status"] = "COOLDOWN";
+      
+      doc["system_status"] = hasError ? "Error" : "System OK";
       
       doc["auto_mode"] = !manualMode;
       
       float lowest = getLowestCellVoltage();
       float highest = getHighestCellVoltage();
       
-      doc["voltage_lowest"] = lowest;
-      doc["voltage_highest"] = highest;
-      doc["voltage_diff_mv"] = (highest - lowest) * 1000.0f;
+      doc["voltage_lowest"] = serialized(String(lowest, 3));
+      doc["voltage_highest"] = serialized(String(highest, 3));
+      doc["voltage_diff_mv"] = serialized(String((highest - lowest) * 1000.0f, 0));
       
       char buffer[512];
       serializeJson(doc, buffer);
@@ -1213,11 +1231,14 @@ void performBroadcast()
   // Direct access - float reads are atomic enough on ESP32
   float lowestVoltage = 5.0f;
   float highestVoltage = 0.0f;
+  float totalBatteryVoltage = 0.0f;
 
   for (int m = 0; m < MAX_MODULES; m++)
   {
     if (!modules[m].exists)
       continue;
+
+    totalBatteryVoltage += modules[m].moduleVoltage;
 
     for (int c = 0; c < CELLS_PER_MODULE; c++)
     {
@@ -1297,6 +1318,7 @@ void performBroadcast()
   doc["lowestVoltage"] = lowestVoltage;
   doc["highestVoltage"] = highestVoltage;
   doc["difference"] = (highestVoltage - lowestVoltage) * 1000.0f;
+  doc["totalVoltage"] = totalBatteryVoltage;
   doc["bmsTargetVoltage"] = bmsTargetVoltage;
   doc["activeTargetVoltage"] = activeTargetVoltage;
   doc["gatewayMode"] = gatewayMode;
@@ -2077,12 +2099,14 @@ const char index_html[] PROGMEM = R"rawliteral(
                 }
                 titleDiv.innerHTML = 'Module ' + module.id + voltageText;
                 
-                const indicatorDiv = document.createElement('div');
-                indicatorDiv.className = 'balance-indicator ' + (module.balancing ? 'active' : 'inactive');
-                indicatorDiv.textContent = module.balancing ? 'BALANCING' : 'IDLE';
-                
                 headerDiv.appendChild(titleDiv);
-                headerDiv.appendChild(indicatorDiv);
+
+                if (module.balancing) {
+                    const indicatorDiv = document.createElement('div');
+                    indicatorDiv.className = 'balance-indicator active';
+                    indicatorDiv.textContent = 'BALANCING';
+                    headerDiv.appendChild(indicatorDiv);
+                }
                 
                 const cellsDiv = document.createElement('div');
                 cellsDiv.className = 'cells';
@@ -2237,7 +2261,11 @@ const char index_html[] PROGMEM = R"rawliteral(
             
             // Update chart info
             const chartInfo = document.getElementById('chartInfo');
-            chartInfo.textContent = `Range: ${minVoltage.toFixed(3)}V - ${maxVoltage.toFixed(3)}V | Δ${(voltageRange * 1000).toFixed(1)}mV | Status: ${data.status} | Target: ${data.activeTargetVoltage.toFixed(3)}V`;
+            let totalVoltageStr = '';
+            if (data.totalVoltage > 0) {
+                totalVoltageStr = ' | Total: ' + data.totalVoltage.toFixed(1) + 'V';
+            }
+            chartInfo.textContent = `Range: ${minVoltage.toFixed(3)}V - ${maxVoltage.toFixed(3)}V | Δ${(voltageRange * 1000).toFixed(1)}mV | Status: ${data.status} | Target: ${data.activeTargetVoltage.toFixed(3)}V` + totalVoltageStr;
         }
         
         function sendCommand(cmd) {
