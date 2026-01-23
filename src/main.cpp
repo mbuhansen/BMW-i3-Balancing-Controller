@@ -132,7 +132,7 @@ Preferences preferences;
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 unsigned long lastMqttPublish = 0;
-const unsigned long MQTT_PUBLISH_INTERVAL = 5000;
+const unsigned long MQTT_PUBLISH_INTERVAL = 15000;
 
 // Telnet server for remote logging (Port 23)
 WiFiServer telnetServer(23);
@@ -2263,7 +2263,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             const chartInfo = document.getElementById('chartInfo');
             let totalVoltageStr = '';
             if (data.totalVoltage > 0) {
-                totalVoltageStr = ' | Total: ' + data.totalVoltage.toFixed(1) + 'V';
+                totalVoltageStr = ' | Total: ' + data.totalVoltage.toFixed(2) + 'V';
             }
             chartInfo.textContent = `Range: ${minVoltage.toFixed(3)}V - ${maxVoltage.toFixed(3)}V | Δ${(voltageRange * 1000).toFixed(1)}mV | Status: ${data.status} | Target: ${data.activeTargetVoltage.toFixed(3)}V` + totalVoltageStr;
         }
