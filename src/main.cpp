@@ -716,27 +716,37 @@ void readCANMessages()
         // BMS expects this bit clear, so mask it out for cell voltage messages (0x120-0x157)
         // NOTE: Byte 6 is a counter and must NOT be modified
         // NOTE: Do NOT mask 0x160-0x177 (balance status, temperatures, diagnostics)
-        if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6)
+        if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6) 
         {
-          // Check if any bit 7 is set before masking
-          bool needsRecalc = (forward_msg.data[1] & 0x80) || (forward_msg.data[3] & 0x80) || (forward_msg.data[5] & 0x80);
+            int moduleIdx = mcp_id & 0x0F;
+            uint8_t cellBase = 0;
+            if (mcp_id >= 0x130 && mcp_id <= 0x13F) cellBase = 3;
+            else if (mcp_id >= 0x140 && mcp_id <= 0x14F) cellBase = 6;
+            else if (mcp_id >= 0x150 && mcp_id <= 0x15F) cellBase = 9;
 
-          forward_msg.data[1] &= 0x7F; // Cell 1 high byte - clear bit 7
-          forward_msg.data[3] &= 0x7F; // Cell 2 high byte - clear bit 7
-          forward_msg.data[5] &= 0x7F; // Cell 3 high byte - clear bit 7
-                                       // Byte 6 (counter) is NOT modified
-
-          // Only recalculate CRC if we actually changed the data
-          if (needsRecalc)
-          {
-            forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg);
-            /*
-            if (canDebugTwaiEnabled)
-            {
-              telnetPrintf("[MASK] 0x%03X - cleared bit 7 from voltage bytes\n", mcp_id);
+            // Hvis vi balancerer, så ignorer de rå mcp_data og byg pakken fra 
+            // de stabile værdier vi har i 'modules' (dem som WebUI også bruger)
+            if (balancingActive && !balancingPaused) {
+                for (int i = 0; i < 3; i++) {
+                    // Konverter float spænding tilbage til det format BMS forventer (14-bit millivolt)
+                    uint16_t v = (uint16_t)(modules[moduleIdx].cellVoltages[cellBase + i] * 1000.0f);
+                    forward_msg.data[i*2] = v & 0xFF;
+                    forward_msg.data[i*2 + 1] = (v >> 8) & 0x3F; // Maskerer bit 6 og 7 (fjerner balance-flag)
+                }
+            } else {
+                // Normal drift: Bare maskér bit 7 ud af de rå data
+                for (int i = 0; i < mcp_len; i++) {
+                    forward_msg.data[i] = mcp_data[i];
+                }
+                forward_msg.data[1] &= 0x7F;
+                forward_msg.data[3] &= 0x7F;
+                forward_msg.data[5] &= 0x7F;
             }
-            */
-          }
+            
+            // Beregn ny checksum da data er ændret
+            forward_msg.data[mcp_len - 1] = calculateChecksum(forward_msg);
+            twai_transmit(&forward_msg, pdMS_TO_TICKS(10));
+            continue; // Vigtigt: Hop videre så linje 715 ikke sender pakken igen
         }
 
         // Mask balance status in 0x10X messages (byte 3, 4 and 5 contain balance status)
