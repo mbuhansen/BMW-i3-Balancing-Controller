@@ -86,10 +86,10 @@ struct BMWModule
 // Global variables
 BMWModule modules[MAX_MODULES];
 bool balancingActive = false;
-bool manualMode = true;  // Start in MANUAL mode - gateway mode, no automatic balancing
-bool autoModeAtStartup = false; // Setting: Start in Auto mode?
-bool gatewayMode = true; // GATEWAY: Forward messages between BMS and slave modules
-bool mqttEnabled = false; // Setting: Enable/Disable MQTT
+bool manualMode = true;              // Start in MANUAL mode - gateway mode, no automatic balancing
+bool autoModeAtStartup = false;      // Setting: Start in Auto mode?
+bool gatewayMode = true;             // GATEWAY: Forward messages between BMS and slave modules
+bool mqttEnabled = false;            // Setting: Enable/Disable MQTT
 bool balancingFeedbackLimit = false; // Setting: Stop balancing if no feedback (0x10X)
 bool externalMasterDetected = false;
 bool canDebugTwaiEnabled = false;    // TWAI (BMS) debug logging - DISABLED by default
@@ -112,8 +112,8 @@ const unsigned long BALANCING_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour cooldown a
 // Balancing duty cycle (Run 15m / Pause 5m)
 bool balancingPaused = false;
 unsigned long balancingCycleTimer = 0;
-const unsigned long BALANCE_RUN_TIME_MS = 15 * 60 * 1000;   // 15 minutes continuous
-const unsigned long BALANCE_PAUSE_TIME_MS = 5 * 60 * 1000;  // 5 minutes pause
+const unsigned long BALANCE_RUN_TIME_MS = 15 * 60 * 1000;  // 15 minutes continuous
+const unsigned long BALANCE_PAUSE_TIME_MS = 5 * 60 * 1000; // 5 minutes pause
 
 // (Unused legacy variables removed)
 
@@ -232,19 +232,23 @@ void checkTelnetClient()
 }
 
 // MQTT Helper: Get base topic with suffix
-String getBaseTopic() {
+String getBaseTopic()
+{
   String topic = "bmw_i3_bms";
-  if (controllerSuffix.length() > 0) {
+  if (controllerSuffix.length() > 0)
+  {
     topic += "_" + controllerSuffix;
   }
   return topic;
 }
 
 // MQTT Helper: Send Home Assistant Discovery payloads
-void sendHADiscovery() {
+void sendHADiscovery()
+{
   String nodeId = "bmw_i3_bms";
   String deviceName = "BMW i3 BMS";
-  if (controllerSuffix.length() > 0) {
+  if (controllerSuffix.length() > 0)
+  {
     nodeId += "_" + controllerSuffix;
     deviceName += " " + controllerSuffix;
   }
@@ -254,34 +258,37 @@ void sendHADiscovery() {
 
   // Common device config
   JsonObject deviceParams; // Use object inside the loop directly or helper
-  
+
   // Define sensors to discover
-  struct SensorConfig {
-    const char* id;
-    const char* name;
-    const char* unit;
-    const char* devClass;
-    const char* valueTpl;
+  struct SensorConfig
+  {
+    const char *id;
+    const char *name;
+    const char *unit;
+    const char *devClass;
+    const char *valueTpl;
   };
 
   SensorConfig sensors[] = {
-    {"volt_min", "Lowest Voltage", "V", "voltage", "{{ value_json.voltage_lowest }}"},
-    {"volt_max", "Highest Voltage", "V", "voltage", "{{ value_json.voltage_highest }}"},
-    {"volt_diff", "Cell Diff", "mV", "voltage", "{{ value_json.voltage_diff_mv }}"},
-    {"status", "Status", "", "", "{{ value_json.status }}"},
-    {"mode", "Auto Mode", "", "", "{{ 'Auto' if value_json.auto_mode else 'Manual' }}"},
-    {"sys_stat", "System Status", "", "", "{{ value_json.system_status }}"}
-  };
+      {"volt_min", "Lowest Voltage", "V", "voltage", "{{ value_json.voltage_lowest }}"},
+      {"volt_max", "Highest Voltage", "V", "voltage", "{{ value_json.voltage_highest }}"},
+      {"volt_diff", "Cell Diff", "mV", "voltage", "{{ value_json.voltage_diff_mv }}"},
+      {"status", "Status", "", "", "{{ value_json.status }}"},
+      {"mode", "Auto Mode", "", "", "{{ 'Auto' if value_json.auto_mode else 'Manual' }}"},
+      {"sys_stat", "System Status", "", "", "{{ value_json.system_status }}"}};
 
-  for (const auto& s : sensors) {
+  for (const auto &s : sensors)
+  {
     JsonDocument doc;
     doc["name"] = s.name;
     doc["stat_t"] = stateTopic;
     doc["val_tpl"] = s.valueTpl;
-    if (strlen(s.unit) > 0) doc["unit_of_meas"] = s.unit;
-    if (strlen(s.devClass) > 0) doc["dev_cla"] = s.devClass;
+    if (strlen(s.unit) > 0)
+      doc["unit_of_meas"] = s.unit;
+    if (strlen(s.devClass) > 0)
+      doc["dev_cla"] = s.devClass;
     doc["uniq_id"] = nodeId + "_" + s.id;
-    
+
     JsonObject dev = doc["dev"].to<JsonObject>();
     dev["ids"] = nodeId;
     dev["name"] = deviceName;
@@ -292,7 +299,8 @@ void sendHADiscovery() {
     String topic = "homeassistant/sensor/" + nodeId + "/" + s.id + "/config";
     char buffer[1024];
     size_t n = serializeJson(doc, buffer);
-    if (!mqttClient.publish(topic.c_str(), buffer, true)) {
+    if (!mqttClient.publish(topic.c_str(), buffer, true))
+    {
       telnetPrintf("MQTT: Failed to publish discovery for %s (len=%d)\n", s.id, n);
     }
     delay(10); // Slack for network
@@ -304,7 +312,8 @@ void sendHADiscovery() {
 // MQTT Functions
 void reconnectMQTT()
 {
-  if (!mqttEnabled) return;
+  if (!mqttEnabled)
+    return;
 
   if (!mqttClient.connected())
   {
@@ -312,15 +321,19 @@ void reconnectMQTT()
 
     // Construct unique Client ID based on suffix
     String clientId = "BMW-i3-BMS";
-    if (controllerSuffix.length() > 0) {
-        clientId += "-" + controllerSuffix;
+    if (controllerSuffix.length() > 0)
+    {
+      clientId += "-" + controllerSuffix;
     }
 
     // Check if MQTT credentials are provided
-    if (String(MQTT_USER).length() > 0) {
-       connected = mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASSWORD);
-    } else {
-       connected = mqttClient.connect(clientId.c_str());
+    if (String(MQTT_USER).length() > 0)
+    {
+      connected = mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASSWORD);
+    }
+    else
+    {
+      connected = mqttClient.connect(clientId.c_str());
     }
 
     if (connected)
@@ -335,7 +348,8 @@ void reconnectMQTT()
 
 void processMQTT()
 {
-  if (!mqttEnabled) return;
+  if (!mqttEnabled)
+    return;
 
   if (WiFi.status() != WL_CONNECTED)
     return;
@@ -356,7 +370,7 @@ void processMQTT()
     if (millis() - lastMqttPublish > MQTT_PUBLISH_INTERVAL)
     {
       lastMqttPublish = millis();
-      
+
       // Publish Status
       JsonDocument doc;
 
@@ -370,26 +384,28 @@ void processMQTT()
           break;
         }
       }
-      if (millis() < 5000) hasError = false;
-      
+      if (millis() < 5000)
+        hasError = false;
+
       // Basic Status
       doc["status"] = balancingActive ? (balancingPaused ? "BALANCING_PAUSED" : "BALANCING") : "IDLE";
-      if (balancingCooldownStartTime > 0) doc["status"] = "COOLDOWN";
-      
+      if (balancingCooldownStartTime > 0)
+        doc["status"] = "COOLDOWN";
+
       doc["system_status"] = hasError ? "Error" : "System OK";
-      
+
       doc["auto_mode"] = !manualMode;
-      
+
       float lowest = getLowestCellVoltage();
       float highest = getHighestCellVoltage();
-      
+
       doc["voltage_lowest"] = serialized(String(lowest, 3));
       doc["voltage_highest"] = serialized(String(highest, 3));
       doc["voltage_diff_mv"] = serialized(String((highest - lowest) * 1000.0f, 0));
-      
+
       char buffer[512];
       serializeJson(doc, buffer);
-      
+
       String topic = getBaseTopic() + "/metrics";
       mqttClient.publish(topic.c_str(), buffer);
     }
@@ -716,37 +732,45 @@ void readCANMessages()
         // BMS expects this bit clear, so mask it out for cell voltage messages (0x120-0x157)
         // NOTE: Byte 6 is a counter and must NOT be modified
         // NOTE: Do NOT mask 0x160-0x177 (balance status, temperatures, diagnostics)
-        if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6) 
+        if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6)
         {
-            int moduleIdx = mcp_id & 0x0F;
-            uint8_t cellBase = 0;
-            if (mcp_id >= 0x130 && mcp_id <= 0x13F) cellBase = 3;
-            else if (mcp_id >= 0x140 && mcp_id <= 0x14F) cellBase = 6;
-            else if (mcp_id >= 0x150 && mcp_id <= 0x15F) cellBase = 9;
+          int moduleIdx = mcp_id & 0x0F;
+          uint8_t cellBase = 0;
+          if (mcp_id >= 0x130 && mcp_id <= 0x13F)
+            cellBase = 3;
+          else if (mcp_id >= 0x140 && mcp_id <= 0x14F)
+            cellBase = 6;
+          else if (mcp_id >= 0x150 && mcp_id <= 0x15F)
+            cellBase = 9;
 
-            // Hvis vi balancerer, så ignorer de rå mcp_data og byg pakken fra 
-            // de stabile værdier vi har i 'modules' (dem som WebUI også bruger)
-            if (balancingActive && !balancingPaused) {
-                for (int i = 0; i < 3; i++) {
-                    // Konverter float spænding tilbage til det format BMS forventer (14-bit millivolt)
-                    uint16_t v = (uint16_t)(modules[moduleIdx].cellVoltages[cellBase + i] * 1000.0f);
-                    forward_msg.data[i*2] = v & 0xFF;
-                    forward_msg.data[i*2 + 1] = (v >> 8) & 0x3F; // Maskerer bit 6 og 7 (fjerner balance-flag)
-                }
-            } else {
-                // Normal drift: Bare maskér bit 7 ud af de rå data
-                for (int i = 0; i < mcp_len; i++) {
-                    forward_msg.data[i] = mcp_data[i];
-                }
-                forward_msg.data[1] &= 0x7F;
-                forward_msg.data[3] &= 0x7F;
-                forward_msg.data[5] &= 0x7F;
+          // Hvis vi balancerer, så ignorer de rå mcp_data og byg pakken fra
+          // de stabile værdier vi har i 'modules' (dem som WebUI også bruger)
+          if (balancingActive && !balancingPaused)
+          {
+            for (int i = 0; i < 3; i++)
+            {
+              // Konverter float spænding tilbage til det format BMS forventer (14-bit millivolt)
+              uint16_t v = (uint16_t)(modules[moduleIdx].cellVoltages[cellBase + i] * 1000.0f);
+              forward_msg.data[i * 2] = v & 0xFF;
+              forward_msg.data[i * 2 + 1] = (v >> 8) & 0x3F; // Maskerer bit 6 og 7 (fjerner balance-flag)
             }
-            
-            // Beregn ny checksum da data er ændret
-            forward_msg.data[mcp_len - 1] = calculateChecksum(forward_msg);
-            twai_transmit(&forward_msg, pdMS_TO_TICKS(10));
-            continue; // Vigtigt: Hop videre så linje 715 ikke sender pakken igen
+          }
+          else
+          {
+            // Normal drift: Bare maskér bit 7 ud af de rå data
+            for (int i = 0; i < mcp_len; i++)
+            {
+              forward_msg.data[i] = mcp_data[i];
+            }
+            forward_msg.data[1] &= 0x7F;
+            forward_msg.data[3] &= 0x7F;
+            forward_msg.data[5] &= 0x7F;
+          }
+
+          // Beregn ny checksum da data er ændret
+          forward_msg.data[mcp_len - 1] = calculateChecksum(forward_msg);
+          twai_transmit(&forward_msg, pdMS_TO_TICKS(10));
+          continue; // Vigtigt: Hop videre så linje 715 ikke sender pakken igen
         }
 
         // Mask balance status in 0x10X messages (byte 3, 4 and 5 contain balance status)
@@ -1078,10 +1102,11 @@ void updateBalancing()
   }
 
   float lowestVoltage = getLowestCellVoltage();
-  
+
   // Always update active target to lowest + 2mV (User Request)
-  if (lowestVoltage > 0.5f) {
-      activeTargetVoltage = lowestVoltage + 0.002f;
+  if (lowestVoltage > 0.5f)
+  {
+    activeTargetVoltage = lowestVoltage + 0.002f;
   }
 
   float highestVoltage = getHighestCellVoltage();
@@ -1204,24 +1229,24 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
           }
           if (doc["autoModeAtStartup"].is<bool>())
           {
-             autoModeAtStartup = doc["autoModeAtStartup"];
-             preferences.putBool("autoStart", autoModeAtStartup);
-             Serial.printf("Auto Start set to %s\n", autoModeAtStartup ? "YES" : "NO");
-             changed = true;
+            autoModeAtStartup = doc["autoModeAtStartup"];
+            preferences.putBool("autoStart", autoModeAtStartup);
+            Serial.printf("Auto Start set to %s\n", autoModeAtStartup ? "YES" : "NO");
+            changed = true;
           }
-           if (doc["balancingFeedbackLimit"].is<bool>())
+          if (doc["balancingFeedbackLimit"].is<bool>())
           {
-             balancingFeedbackLimit = doc["balancingFeedbackLimit"];
-             preferences.putBool("feedbackLimit", balancingFeedbackLimit);
-             Serial.printf("Feedback Limit set to %s\n", balancingFeedbackLimit ? "YES" : "NO");
-             changed = true;
+            balancingFeedbackLimit = doc["balancingFeedbackLimit"];
+            preferences.putBool("feedbackLimit", balancingFeedbackLimit);
+            Serial.printf("Feedback Limit set to %s\n", balancingFeedbackLimit ? "YES" : "NO");
+            changed = true;
           }
           if (doc["mqttEnabled"].is<bool>())
           {
-             mqttEnabled = doc["mqttEnabled"];
-             preferences.putBool("mqttEnabled", mqttEnabled);
-             Serial.printf("MQTT Enabled set to %s\n", mqttEnabled ? "YES" : "NO");
-             changed = true;
+            mqttEnabled = doc["mqttEnabled"];
+            preferences.putBool("mqttEnabled", mqttEnabled);
+            Serial.printf("MQTT Enabled set to %s\n", mqttEnabled ? "YES" : "NO");
+            changed = true;
           }
 
           if (changed)
@@ -2438,7 +2463,8 @@ void setup()
   balancingFeedbackLimit = preferences.getBool("feedbackLimit", false);
 
   // Apply auto mode at startup if enabled
-  if (autoModeAtStartup) {
+  if (autoModeAtStartup)
+  {
     manualMode = false;
   }
 
@@ -2510,10 +2536,10 @@ void setup()
   if (WiFi.status() == WL_CONNECTED)
   {
     Serial.println("\n✓ WiFi connected!");
-    
+
     // Configure MQTT Server
     mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
-    
+
     IPAddress IP = WiFi.localIP();
     Serial.print("IP address: ");
     Serial.println(IP);
