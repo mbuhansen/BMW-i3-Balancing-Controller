@@ -798,12 +798,15 @@ void readCANMessages()
         // Debug output for forwarding
         if (canDebugTwaiEnabled)
         {
-          Serial.printf("[TWAI    TX] 0x%03X [%d] ", forward_msg.identifier, forward_msg.data_length_code);
+          char debugBuf[128];
+          int offset = snprintf(debugBuf, sizeof(debugBuf), "[TWAI    TX] 0x%03X [%d] ", forward_msg.identifier, forward_msg.data_length_code);
           for (int i = 0; i < forward_msg.data_length_code; i++)
           {
-            Serial.printf("%02X ", forward_msg.data[i]);
+            offset += snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%02X ", forward_msg.data[i]);
           }
-          Serial.printf("%s\n", result == ESP_OK ? "OK" : "FAIL");
+          snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%s\n", result == ESP_OK ? "OK" : "FAIL");
+          telnetPrintf("%s", debugBuf);
+          Serial.print(debugBuf);
         }
       }
     }
@@ -825,12 +828,15 @@ void readCANMessages()
       if (millis() - lastTwaiDebug > 200) // Only every 200ms
       {
         lastTwaiDebug = millis();
-        Serial.printf("[TWAI    RX] 0x%03X [%d] ", id, twai_msg.data_length_code);
+        char debugBuf[128];
+        int offset = snprintf(debugBuf, sizeof(debugBuf), "[TWAI    RX] 0x%03X [%d] ", id, twai_msg.data_length_code);
         for (int i = 0; i < twai_msg.data_length_code; i++)
         {
-          Serial.printf("%02X ", twai_msg.data[i]);
+          offset += snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%02X ", twai_msg.data[i]);
         }
-        Serial.println("");
+        snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "\n");
+        telnetPrintf("%s", debugBuf);
+        Serial.print(debugBuf);
       }
     }
 
