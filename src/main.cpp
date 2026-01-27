@@ -1541,6 +1541,24 @@ const char index_html[] PROGMEM = R"rawliteral(
             backdrop-filter: blur(10px);
             border-radius: 15px;
             padding: 15px;
+            transition: all 0.3s ease;
+        }
+        .module.error {
+            border: 1px solid #ef4444;
+            box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);
+        }
+        .module-error-badge {
+            background: #ef4444;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7em;
+            margin-left: 10px;
+            cursor: help;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            vertical-align: middle;
         }
         .module-header {
             display: flex;
@@ -2155,6 +2173,51 @@ const char index_html[] PROGMEM = R"rawliteral(
                 }
                 titleDiv.innerHTML = 'Module ' + module.id + voltageText;
                 
+                if (module.error > 0) {
+                    const errorBadge = document.createElement('span');
+                    errorBadge.className = 'module-error-badge';
+                    errorBadge.textContent = '⚠️ 0x' + module.error.toString(16).toUpperCase();
+                    
+                    // Decoder for BMW i3 / SimpBMS Error Codes
+                    // Based on BMSModuleManager.cpp (Faults = Byte 0, Alerts = Byte 1)
+                    let errors = [];
+                    
+                    // Byte 0: Faults
+                    if (module.error & 0x01) errors.push("Over Voltage");
+                    if (module.error & 0x02) errors.push("Under Voltage");
+                    if (module.error & 0x04) errors.push("CRC Error");
+                    if (module.error & 0x08) errors.push("Power-On Reset");
+                    if (module.error & 0x10) errors.push("Test Fault");
+                    if (module.error & 0x20) errors.push("Internal Regs Inconsistent");
+                    
+                    // Byte 1: Alerts (Shifted by 8 bits)
+                    if (module.error & 0x100) errors.push("Over Temp (TS1)");
+                    if (module.error & 0x200) errors.push("Over Temp (TS2)");
+                    if (module.error & 0x400) errors.push("Sleep Mode");
+                    if (module.error & 0x800) errors.push("Thermal Shutdown");
+                    if (module.error & 0x1000) errors.push("Test Alert");
+                    if (module.error & 0x2000) errors.push("OTP EPROM/Media Error");
+                    if (module.error & 0x4000) errors.push("Group3 Regs Invalid");
+                    if (module.error & 0x8000) errors.push("Address Not Reg");
+
+                    let errorDesc = errors.length > 0 ? errors.join(", ") : 'Unknown Error';
+                    errorDesc += ' (0x' + module.error.toString(16).toUpperCase() + ')';
+                    
+                    errorBadge.title = errorDesc;
+                    // Also show as text if specific errors found
+                    if (errors.length > 0) {
+                         const errorText = document.createElement('span');
+                         errorText.style.fontSize = '0.7em';
+                         errorText.style.marginLeft = '8px';
+                         errorText.style.opacity = '0.8';
+                         errorText.textContent = errors[0] + (errors.length > 1 ? ' +' : '');
+                         titleDiv.appendChild(errorText);
+                    }
+                    
+                    titleDiv.appendChild(errorBadge);
+                    moduleDiv.classList.add('error');
+                }
+
                 headerDiv.appendChild(titleDiv);
 
                 if (module.balancing) {
