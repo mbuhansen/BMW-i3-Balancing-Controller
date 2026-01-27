@@ -893,6 +893,8 @@ void readCANMessages()
       // Only enable balancing if active AND not in cooling pause
       if (balancingActive && !balancingPaused && twai_msg.data_length_code >= 8)
       {
+        send_data[2] = 0xFF;
+        send_data[3] = 0x5F;
         send_data[4] = 0x08; // Enable balancing
 
         // Set target voltage to lowest cell + 2mV
