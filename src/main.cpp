@@ -704,6 +704,26 @@ void readCANMessages()
   int mcp_rx_count = 0;
   while (readCAN2(mcp_id, mcp_len, mcp_data) && mcp_rx_count++ < 30)
   {
+    // Debug output for MCP2515 RX
+    if (canDebugMcp2515Enabled)
+    {
+      static uint32_t lastMcpDebug = 0;
+      if (millis() - lastMcpDebug > 200) // Only every 200ms
+      {
+        lastMcpDebug = millis();
+        char debugBuf[128];
+        float ts = millis() / 1000.0f;
+        int offset = snprintf(debugBuf, sizeof(debugBuf), "[%08.3f] [MCP2515 RX] 0x%03X [%d] ", ts, mcp_id, mcp_len);
+        for (int i = 0; i < mcp_len; i++)
+        {
+          offset += snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%02X ", mcp_data[i]);
+        }
+        snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "\n");
+        telnetPrintf("%s", debugBuf);
+        Serial.print(debugBuf);
+      }
+    }
+
     // Parse module data for monitoring (0x100-0x1FF)
     if ((mcp_id & 0xF00) == 0x100)
     {
@@ -833,7 +853,8 @@ void readCANMessages()
         if (canDebugTwaiEnabled)
         {
           char debugBuf[128];
-          int offset = snprintf(debugBuf, sizeof(debugBuf), "[TWAI    TX] 0x%03X [%d] ", forward_msg.identifier, forward_msg.data_length_code);
+          float ts = millis() / 1000.0f;
+          int offset = snprintf(debugBuf, sizeof(debugBuf), "[%08.3f] [TWAI    TX] 0x%03X [%d] ", ts, forward_msg.identifier, forward_msg.data_length_code);
           for (int i = 0; i < forward_msg.data_length_code; i++)
           {
             offset += snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%02X ", forward_msg.data[i]);
@@ -863,7 +884,8 @@ void readCANMessages()
       {
         lastTwaiDebug = millis();
         char debugBuf[128];
-        int offset = snprintf(debugBuf, sizeof(debugBuf), "[TWAI    RX] 0x%03X [%d] ", id, twai_msg.data_length_code);
+        float ts = millis() / 1000.0f;
+        int offset = snprintf(debugBuf, sizeof(debugBuf), "[%08.3f] [TWAI    RX] 0x%03X [%d] ", ts, id, twai_msg.data_length_code);
         for (int i = 0; i < twai_msg.data_length_code; i++)
         {
           offset += snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%02X ", twai_msg.data[i]);
