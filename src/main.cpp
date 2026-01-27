@@ -893,8 +893,8 @@ void readCANMessages()
       // Only enable balancing if active AND not in cooling pause
       if (balancingActive && !balancingPaused && twai_msg.data_length_code >= 8)
       {
-        send_data[2] = 0xFF;
-        send_data[3] = 0x5F;
+        send_data[2] = 0x00;
+        send_data[3] = 0x50;
         send_data[4] = 0x08; // Enable balancing
 
         // Set target voltage to lowest cell + 2mV
@@ -1387,7 +1387,8 @@ void performBroadcast()
     JsonObject moduleObj = modulesArray.add<JsonObject>();
     moduleObj["id"] = m + 1;
     moduleObj["voltage"] = modules[m].moduleVoltage;
-    moduleObj["balancing"] = (modules[m].balanceStatus != 0); // Use balanceStatus from 0x10X byte 4-5 (same as SimpleBMS)
+    moduleObj["balancing"] = (modules[m].balanceStatus != 0);
+    moduleObj["balanceStatus"] = modules[m].balanceStatus; // Send the bitmask
     moduleObj["error"] = modules[m].errorCode;
 
     JsonArray cellsArray = moduleObj["cells"].to<JsonArray>();
@@ -1566,6 +1567,18 @@ const char index_html[] PROGMEM = R"rawliteral(
         }
         .balance-indicator.inactive {
             background: rgba(255,255,255,0.2);
+        }
+        .balancing-cell-indicator {
+            display: inline-block;
+            margin-left: 5px;
+            color: #4ade80;
+            font-weight: bold;
+            animation: blink 1s infinite;
+        }
+        @keyframes blink {
+            0% { opacity: 1; }
+            50% { opacity: 0; }
+            100% { opacity: 1; }
         }
         @keyframes pulse {
             0%, 100% { opacity: 1; }
@@ -2164,7 +2177,11 @@ const char index_html[] PROGMEM = R"rawliteral(
                     
                     const labelDiv = document.createElement('div');
                     labelDiv.className = 'cell-label';
-                    labelDiv.textContent = 'Cell ' + (index + 1);
+                    labelDiv.innerHTML = 'Cell ' + (index + 1);
+
+                    if (module.balanceStatus && ((module.balanceStatus >> index) & 1)) {
+                        labelDiv.innerHTML += '<span class="balancing-cell-indicator">B</span>';
+                    }
                     
                     const voltageDiv = document.createElement('div');
                     voltageDiv.className = 'cell-voltage';
