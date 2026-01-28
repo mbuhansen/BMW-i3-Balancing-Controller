@@ -767,6 +767,13 @@ void readCANMessages()
           // de stabile værdier vi har i 'modules' (dem som WebUI også bruger)
           if (balancingActive && !balancingPaused)
           {
+            // Først kopier ALLE bytes fra original besked (inkl. counter i byte 6)
+            for (int i = 0; i < mcp_len; i++)
+            {
+              forward_msg.data[i] = mcp_data[i];
+            }
+            
+            // Så overskriv KUN cellespændingerne (byte 0-5) med stabile værdier
             for (int i = 0; i < 3; i++)
             {
               // Konverter float spænding tilbage til det format BMS forventer (14-bit millivolt)
