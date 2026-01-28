@@ -763,28 +763,28 @@ void readCANMessages()
           else if (mcp_id >= 0x150 && mcp_id <= 0x15F)
             cellBase = 9;
 
-          // Hvis vi balancerer, så ignorer de rå mcp_data og byg pakken fra
-          // de stabile værdier vi har i 'modules' (dem som WebUI også bruger)
-          if (balancingActive && !balancingPaused)
+          // Tjek om balancing er aktiv på denne modul (bit 7 sat i en af spændingsbytes)
+          bool balancingFlagSet = (mcp_data[1] & 0x80) || (mcp_data[3] & 0x80) || (mcp_data[5] & 0x80);
+
+          // Hvis vi balancerer OG modulet har balance-flag sat, så ignorer de rå mcp_data 
+          // og byg pakken fra de stabile værdier vi har i 'modules' (dem som WebUI også bruger)
+          if (balancingActive && !balancingPaused && balancingFlagSet)
           {
-            // Først kopier ALLE bytes fra original besked (inkl. counter i byte 6)
-            for (int i = 0; i < mcp_len; i++)
-            {
-              forward_msg.data[i] = mcp_data[i];
-            }
+            // Kopier KUN byte 6 (counter) - checksum beregnes bagefter
+            forward_msg.data[6] = mcp_data[6];
             
-            // Så overskriv KUN cellespændingerne (byte 0-5) med stabile værdier
+            // Overskriv cellespændingerne (byte 0-5) med stabile værdier
             for (int i = 0; i < 3; i++)
             {
               // Konverter float spænding tilbage til det format BMS forventer (14-bit millivolt)
               uint16_t v = (uint16_t)(modules[moduleIdx].cellVoltages[cellBase + i] * 1000.0f);
               forward_msg.data[i * 2] = v & 0xFF;
-              forward_msg.data[i * 2 + 1] = (v >> 8) & 0x3F; // Maskerer bit 6 og 7 (fjerner balance-flag)
+              forward_msg.data[i * 2 + 1] = (v >> 8); // Ingen maske nødvendig - float værdier har aldrig bit 6/7 sat
             }
           }
-          else
+          else if (balancingFlagSet)
           {
-            // Normal drift: Bare maskér bit 7 ud af de rå data
+            // Balance-flag er sat, men vi override ikke - bare maskér bit 7 ud
             for (int i = 0; i < mcp_len; i++)
             {
               forward_msg.data[i] = mcp_data[i];
@@ -792,6 +792,14 @@ void readCANMessages()
             forward_msg.data[1] &= 0x7F;
             forward_msg.data[3] &= 0x7F;
             forward_msg.data[5] &= 0x7F;
+          }
+          else
+          {
+            // Ingen balance-flag sat - bare kopier data uændret
+            for (int i = 0; i < mcp_len; i++)
+            {
+              forward_msg.data[i] = mcp_data[i];
+            }
           }
 
           // Beregn ny checksum da data er ændret
