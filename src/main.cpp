@@ -1324,6 +1324,7 @@ void performBroadcast()
   if (hasError && (millis() > 5000))
   {
     status = "ERROR";
+    lowestVoltage = 0.0f;  // Set to 0 when in error state
   }
   else if (balancingActive)
   {
@@ -2753,8 +2754,25 @@ void loop()
   {
     lastStatusPrint = millis();
 
-    float lowestV = getLowestCellVoltage();
-    float highestV = getHighestCellVoltage();
+    // Check if any modules are connected
+    bool hasModules = false;
+    for (int m = 0; m < MAX_MODULES; m++)
+    {
+      if (modules[m].exists && (millis() - modules[m].lastUpdate < 5000))
+      {
+        hasModules = true;
+        break;
+      }
+    }
+
+    float lowestV = 0.0f;
+    float highestV = 0.0f;
+    
+    if (hasModules)
+    {
+      lowestV = getLowestCellVoltage();
+      highestV = getHighestCellVoltage();
+    }
 
     telnetPrintf("Status: %s | Mode: %s | Cells: %.3fV-%.3fV (Δ%.1fmV)\n",
                  balancingActive ? "BALANCING" : "GATEWAY",
