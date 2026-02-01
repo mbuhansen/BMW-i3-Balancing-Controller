@@ -1600,6 +1600,10 @@ const char index_html[] PROGMEM = R"rawliteral(
             font-weight: bold;
             font-size: 0.85em;
         }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
         .cells {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
