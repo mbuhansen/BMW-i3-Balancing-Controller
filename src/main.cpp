@@ -1603,12 +1603,6 @@ const char index_html[] PROGMEM = R"rawliteral(
         }
         @keyframes blink {
             0% { opacity: 1; }
-            50% { opacity: 0.4; }
-            100% { opacity: 1; }
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.6; }
         }
         .cells {
             display: grid;
