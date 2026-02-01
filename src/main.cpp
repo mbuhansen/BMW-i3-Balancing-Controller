@@ -269,7 +269,15 @@ void sendHADiscovery()
       {"volt_diff", "Cell Diff", "mV", "voltage", "{{ value_json.voltage_diff_mv }}"},
       {"status", "Status", "", "", "{{ value_json.status }}"},
       {"mode", "Auto Mode", "", "", "{{ 'Auto' if value_json.auto_mode else 'Manual' }}"},
-      {"sys_stat", "System Status", "", "", "{{ value_json.system_status }}"}};
+      {"sys_stat", "System Status", "", "", "{{ value_json.system_status }}"},
+      {"bal_m1", "Module 1 Balancing", "", "", "{{ 'ON' if value_json.module_1_balancing else 'OFF' }}"},
+      {"bal_m2", "Module 2 Balancing", "", "", "{{ 'ON' if value_json.module_2_balancing else 'OFF' }}"},
+      {"bal_m3", "Module 3 Balancing", "", "", "{{ 'ON' if value_json.module_3_balancing else 'OFF' }}"},
+      {"bal_m4", "Module 4 Balancing", "", "", "{{ 'ON' if value_json.module_4_balancing else 'OFF' }}"},
+      {"bal_m5", "Module 5 Balancing", "", "", "{{ 'ON' if value_json.module_5_balancing else 'OFF' }}"},
+      {"bal_m6", "Module 6 Balancing", "", "", "{{ 'ON' if value_json.module_6_balancing else 'OFF' }}"},
+      {"bal_m7", "Module 7 Balancing", "", "", "{{ 'ON' if value_json.module_7_balancing else 'OFF' }}"},
+      {"bal_m8", "Module 8 Balancing", "", "", "{{ 'ON' if value_json.module_8_balancing else 'OFF' }}"}};
 
   for (const auto &s : sensors)
   {
@@ -395,7 +403,17 @@ void processMQTT()
       doc["voltage_highest"] = serialized(String(highest, 3));
       doc["voltage_diff_mv"] = serialized(String((highest - lowest) * 1000.0f, 0));
 
-      char buffer[512];
+      // Module balancing status
+      doc["module_1_balancing"] = modules[0].balancing;
+      doc["module_2_balancing"] = modules[1].balancing;
+      doc["module_3_balancing"] = modules[2].balancing;
+      doc["module_4_balancing"] = modules[3].balancing;
+      doc["module_5_balancing"] = modules[4].balancing;
+      doc["module_6_balancing"] = modules[5].balancing;
+      doc["module_7_balancing"] = modules[6].balancing;
+      doc["module_8_balancing"] = modules[7].balancing;
+
+      char buffer[768];
       serializeJson(doc, buffer);
 
       String topic = getBaseTopic() + "/metrics";
