@@ -1012,8 +1012,8 @@ float getLowestCellVoltage()
     for (int c = 0; c < CELLS_PER_MODULE; c++)
     {
       // Ignore Cell 96 (Module 8, Cell 12 in 1-based / m=7, c=11 in 0-based)
-      if (m == 7 && c == 11)
-        continue;
+      //if (m == 7 && c == 11)
+      //  continue;
 
       if (modules[m].cellVoltages[c] > 0.5f && modules[m].cellVoltages[c] < lowest)
       {
@@ -1036,8 +1036,8 @@ float getHighestCellVoltage()
     for (int c = 0; c < CELLS_PER_MODULE; c++)
     {
       // Ignore Cell 96 (Module 8, Cell 12 in 1-based / m=7, c=11 in 0-based)
-      if (m == 7 && c == 11)
-        continue;
+      //if (m == 7 && c == 11)
+      //  continue;
 
       if (modules[m].cellVoltages[c] > highest)
       {
@@ -1323,8 +1323,8 @@ void performBroadcast()
     for (int c = 0; c < CELLS_PER_MODULE; c++)
     {
       // Ignore Cell 96 (Module 8, Cell 12 in 1-based / m=7, c=11 in 0-based)
-      if (m == 7 && c == 11)
-        continue;
+      //if (m == 7 && c == 11)
+      //  continue;
 
       if (modules[m].cellVoltages[c] > 0.5f && modules[m].cellVoltages[c] < lowestVoltage)
       {
