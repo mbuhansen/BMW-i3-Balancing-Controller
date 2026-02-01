@@ -1867,10 +1867,10 @@ const char index_html[] PROGMEM = R"rawliteral(
             background: #22c55e;
             border-radius: 2px;
             box-shadow: 0 0 8px #22c55e;
-            animation: pulse-green 1.5s ease-in-out infinite;
         }
-        @keyframes pulse-green {
-            0%, 100% { opacity: 1; box-shadow: 0 0 8px #22c55e; }
+        .chart-legend {
+            display: flex;
+            justify-content: center;
             gap: 20px;
             margin-top: 15px;
             font-size: 0.9em;
