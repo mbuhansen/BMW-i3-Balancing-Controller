@@ -2718,7 +2718,7 @@ void loop()
 
   // Broadcast data to WebSocket clients - ONLY if clients are connected
   static uint32_t lastBroadcast = 0;
-  if (ws.count() > 0 && millis() - lastBroadcast > 30000) // Only every 30 seconds
+  if (ws.count() > 0 && millis() - lastBroadcast > 15000) // Only every 15 seconds
   {
     lastBroadcast = millis();
     performBroadcast();
