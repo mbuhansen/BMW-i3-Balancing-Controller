@@ -1876,11 +1876,6 @@ const char index_html[] PROGMEM = R"rawliteral(
         }
         @keyframes pulse-green {
             0%, 100% { opacity: 1; box-shadow: 0 0 8px #22c55e; }
-            50% { opacity: 0.6; box-shadow: 0 0 4px #22c55e; }
-        }
-        .chart-legend {
-            display: flex;
-            justify-content: center;
             gap: 20px;
             margin-top: 15px;
             font-size: 0.9em;
