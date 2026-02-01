@@ -44,6 +44,7 @@ float minBalanceVoltage = 3.99f;  // Minimum voltage to start balancing (V)
 float balanceThresholdMv = 10.0f; // Start balancing if cells differ by more than this (mV)
 float balanceHysteresisMv = 5.0f; // Stop balancing when within this (mV)
 String controllerSuffix = "";     // Suffix for controller name (e.g. "1", "2")
+bool dutyCycleEnabled = true;     // Enable duty cycle (15m run / 5m pause)
 
 // BMW CRC8 finalxor values for COMMAND messages (0x080-0x08F)
 // Original values from SimpleBMS - used when modifying BMS commands
@@ -996,10 +997,6 @@ float getLowestCellVoltage()
       continue;
     for (int c = 0; c < CELLS_PER_MODULE; c++)
     {
-      // Ignore Cell 96 (Module 8, Cell 12 in 1-based / m=7, c=11 in 0-based)
-      //if (m == 7 && c == 11)
-      //  continue;
-
       if (modules[m].cellVoltages[c] > 0.5f && modules[m].cellVoltages[c] < lowest)
       {
         lowest = modules[m].cellVoltages[c];
@@ -1020,10 +1017,6 @@ float getHighestCellVoltage()
       continue;
     for (int c = 0; c < CELLS_PER_MODULE; c++)
     {
-      // Ignore Cell 96 (Module 8, Cell 12 in 1-based / m=7, c=11 in 0-based)
-      //if (m == 7 && c == 11)
-      //  continue;
-
       if (modules[m].cellVoltages[c] > highest)
       {
         highest = modules[m].cellVoltages[c];
@@ -1069,32 +1062,40 @@ void updateBalancing()
   if (manualMode)
     return;
 
-  // Duty Cycle Logic (15m Run / 5m Pause)
-  if (balancingActive)
+  // Duty Cycle Logic (15m Run / 5m Pause) - only if enabled
+  if (dutyCycleEnabled)
   {
-    if (!balancingPaused)
+    if (balancingActive)
     {
-      if (millis() - balancingCycleTimer > BALANCE_RUN_TIME_MS)
+      if (!balancingPaused)
       {
-        balancingPaused = true;
-        balancingCycleTimer = millis();
-        // telnetPrintln("Balancing: Pausing (10m cool-down)");
+        if (millis() - balancingCycleTimer > BALANCE_RUN_TIME_MS)
+        {
+          balancingPaused = true;
+          balancingCycleTimer = millis();
+          telnetPrintln("Duty Cycle: Pausing (5m)");
+        }
+      }
+      else
+      {
+        if (millis() - balancingCycleTimer > BALANCE_PAUSE_TIME_MS)
+        {
+          balancingPaused = false;
+          balancingCycleTimer = millis();
+          telnetPrintln("Duty Cycle: Resuming (15m)");
+        }
       }
     }
     else
     {
-      if (millis() - balancingCycleTimer > BALANCE_PAUSE_TIME_MS)
-      {
-        balancingPaused = false;
-        balancingCycleTimer = millis();
-        // telnetPrintln("Balancing: Resuming (30m run)");
-      }
+      balancingPaused = false;
+      balancingCycleTimer = millis();
     }
   }
   else
   {
+    // Duty cycle disabled - always run
     balancingPaused = false;
-    balancingCycleTimer = millis();
   }
 
   float lowestVoltage = getLowestCellVoltage();
@@ -1113,7 +1114,7 @@ void updateBalancing()
   {
     // Start balancing
     balancingActive = true;
-    balancingCycleTimer = millis(); // Start duty cycle timer
+    balancingCycleTimer = millis();       // Start duty cycle timer
     telnetPrintf("Starting balancing: Lowest=%.3fV, Highest=%.3fV, Diff=%.1fmV\n",
                  lowestVoltage, highestVoltage, difference_mV);
   }
@@ -1236,6 +1237,13 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
             Serial.printf("MQTT Enabled set to %s\n", mqttEnabled ? "YES" : "NO");
             changed = true;
           }
+          if (doc["dutyCycleEnabled"].is<bool>())
+          {
+            dutyCycleEnabled = doc["dutyCycleEnabled"];
+            preferences.putBool("dutyCycle", dutyCycleEnabled);
+            Serial.printf("Duty Cycle set to %s\n", dutyCycleEnabled ? "YES" : "NO");
+            changed = true;
+          }
 
           if (changed)
           {
@@ -1271,10 +1279,6 @@ void performBroadcast()
 
     for (int c = 0; c < CELLS_PER_MODULE; c++)
     {
-      // Ignore Cell 96 (Module 8, Cell 12 in 1-based / m=7, c=11 in 0-based)
-      //if (m == 7 && c == 11)
-      //  continue;
-
       if (modules[m].cellVoltages[c] > 0.5f && modules[m].cellVoltages[c] < lowestVoltage)
       {
         lowestVoltage = modules[m].cellVoltages[c];
@@ -1356,6 +1360,7 @@ void performBroadcast()
   doc["controllerSuffix"] = controllerSuffix;
   doc["autoModeAtStartup"] = autoModeAtStartup;
   doc["mqttEnabled"] = mqttEnabled;
+  doc["dutyCycleEnabled"] = dutyCycleEnabled;
 
   JsonArray modulesArray = doc["modules"].to<JsonArray>();
 
@@ -2008,6 +2013,15 @@ const char index_html[] PROGMEM = R"rawliteral(
                             </label>
                         </div>
                     </div>
+                    <div class="setting-item">
+                        <div class="setting-label">Duty Cycle Balancing</div>
+                        <div class="setting-input-group">
+                            <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                <input type="checkbox" id="dutyCycleEnabled" style="width: 20px; height: 20px;">
+                                <span style="font-size: 0.9em; opacity: 0.8;">Enable 15m Run / 5m Pause Cycle</span>
+                            </label>
+                        </div>
+                    </div>
                 </div>
 
                 <div style="display: flex; justify-content: center; margin-top: 15px;">
@@ -2074,6 +2088,9 @@ const char index_html[] PROGMEM = R"rawliteral(
             }
             if (data.mqttEnabled !== undefined) {
                  document.getElementById('mqttEnabled').checked = data.mqttEnabled;
+            }
+            if (data.dutyCycleEnabled !== undefined) {
+                 document.getElementById('dutyCycleEnabled').checked = data.dutyCycleEnabled;
             }
             
             // Update LED indicator
@@ -2302,16 +2319,10 @@ const char index_html[] PROGMEM = R"rawliteral(
             
             if (allCells.length === 0) return;
             
-            // Calculate stats for scaling and highlighting separately
-            // Ignore Module 8 Cell 12 (m=8, c=12) for highlighting statistics
-            const validCells = allCells.filter(c => !(c.moduleId === 8 && c.cellIndex === 12));
-            
-            // If no valid cells (unlikely), fallback to all cells
-            const cellsForStats = validCells.length > 0 ? validCells : allCells;
-            const validVoltages = cellsForStats.map(c => c.voltage);
-            
-            const minVoltage = Math.min(...validVoltages);
-            const maxVoltage = Math.max(...validVoltages);
+            // Calculate voltage range for all cells
+            const allVoltages = allCells.map(c => c.voltage);
+            const minVoltage = Math.min(...allVoltages);
+            const maxVoltage = Math.max(...allVoltages);
             const voltageRange = maxVoltage - minVoltage;
             
             // Create bars for each cell
@@ -2319,35 +2330,24 @@ const char index_html[] PROGMEM = R"rawliteral(
                 const bar = document.createElement('div');
                 bar.className = 'cell-bar';
                 
-                // Calculate height relative to the VALID voltage range
-                // If the ignored cell is out of range, clamp it to 5% min height
+                // Calculate height relative to voltage range
                 let heightPercent = 100;
                 if (voltageRange > 0) {
                     heightPercent = ((cell.voltage - minVoltage) / voltageRange) * 100;
                 }
                 bar.style.height = Math.max(5, Math.min(100, heightPercent)) + '%';
                 
-                // Check if this cell is the ignored one
-                const isIgnored = (cell.moduleId === 8 && cell.cellIndex === 12);
-                
-                // Highlight lowest and highest - ONLY if not the ignored cell
-                if (!isIgnored) {
-                    if (cell.voltage <= minVoltage + 0.001) { // Fuzzy match for float
-                        bar.classList.add('lowest');
-                    } else if (cell.voltage >= maxVoltage - 0.001) {
-                        bar.classList.add('highest');
-                    }
-                } else {
-                    // Optional: distinct visual style for ignored cell?
-                    bar.style.opacity = '0.7'; 
-                    bar.style.background = '#888'; // Greyout
+                // Highlight lowest and highest cells
+                if (cell.voltage <= minVoltage + 0.001) { // Fuzzy match for float
+                    bar.classList.add('lowest');
+                } else if (cell.voltage >= maxVoltage - 0.001) {
+                    bar.classList.add('highest');
                 }
                 
                 // Add tooltip
                 const tooltip = document.createElement('div');
                 tooltip.className = 'cell-bar-tooltip';
                 let tooltipText = `M${cell.moduleId} C${cell.cellIndex}: ${cell.voltage.toFixed(3)}V`;
-                if (isIgnored) tooltipText += ' (Ignored)';
                 tooltip.textContent = tooltipText;
                 bar.appendChild(tooltip);
                 
@@ -2384,6 +2384,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             const controllerSuffix = document.getElementById('controllerSuffix').value;
             const autoModeAtStartup = document.getElementById('autoModeAtStartup').checked;
             const mqttEnabled = document.getElementById('mqttEnabled').checked;
+            const dutyCycleEnabled = document.getElementById('dutyCycleEnabled').checked;
             
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
@@ -2393,7 +2394,8 @@ const char index_html[] PROGMEM = R"rawliteral(
                     balanceHysteresis: balanceHysteresis,
                     controllerSuffix: controllerSuffix,
                     autoModeAtStartup: autoModeAtStartup,
-                    mqttEnabled: mqttEnabled
+                    mqttEnabled: mqttEnabled,
+                    dutyCycleEnabled: dutyCycleEnabled
                 }));
                 
                 // Visual feedback
@@ -2512,6 +2514,7 @@ void setup()
   controllerSuffix = preferences.getString("suffix", "");
   autoModeAtStartup = preferences.getBool("autoStart", false);
   mqttEnabled = preferences.getBool("mqttEnabled", false);
+  dutyCycleEnabled = preferences.getBool("dutyCycle", true);
 
   // Apply auto mode at startup if enabled
   if (autoModeAtStartup)
@@ -2526,6 +2529,7 @@ void setup()
   Serial.printf("- Suffix: '%s'\n", controllerSuffix.c_str());
   Serial.printf("- Auto Start: %s\n", autoModeAtStartup ? "YES" : "NO");
   Serial.printf("- MQTT Enabled: %s\n", mqttEnabled ? "YES" : "NO");
+  Serial.printf("- Duty Cycle: %s\n", dutyCycleEnabled ? "YES" : "NO");
 
   Serial.println("\n\n=================================");
   Serial.println("BMW i3 Balancing Controller");
