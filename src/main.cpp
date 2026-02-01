@@ -102,12 +102,6 @@ uint32_t lastCommandTime = 0;
 uint32_t lastExternalCommandTime = 0;
 uint32_t lastDataUpdate = 0;
 
-// Balancing timeouts
-unsigned long lastBalancingFeedbackTime = 0;
-unsigned long balancingCooldownStartTime = 0;
-const unsigned long BALANCING_TIMEOUT_MS = 15 * 60 * 1000;  // 15 minutes timeout if no feedback
-const unsigned long BALANCING_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour cooldown after timeout
-
 // Balancing duty cycle (Run 15m / Pause 5m)
 bool balancingPaused = false;
 unsigned long balancingCycleTimer = 0;
@@ -388,8 +382,6 @@ void processMQTT()
 
       // Basic Status
       doc["status"] = balancingActive ? (balancingPaused ? "BALANCING_PAUSED" : "BALANCING") : "IDLE";
-      if (balancingCooldownStartTime > 0)
-        doc["status"] = "COOLDOWN";
 
       doc["system_status"] = hasError ? "Error" : "System OK";
 
@@ -610,12 +602,6 @@ void parseModuleMessage(const twai_message_t &msg)
     // Update global balancing state from 0x10X status
     // Any non-zero balance status implies balancing is active
     module.balancing = (module.balanceStatus != 0);
-
-    // Update feedback timer if any module reports balancing
-    if (module.balancing)
-    {
-      lastBalancingFeedbackTime = millis();
-    }
 
     break;
   }
@@ -1111,22 +1097,6 @@ void updateBalancing()
     balancingCycleTimer = millis();
   }
 
-  // Check cooldown if not active (prevent restart)
-  if (!balancingActive && balancingCooldownStartTime > 0)
-  {
-    if (millis() - balancingCooldownStartTime < BALANCING_COOLDOWN_MS)
-    {
-      // In cooldown
-      return;
-    }
-    else
-    {
-      // Cooldown expired
-      balancingCooldownStartTime = 0;
-      telnetPrintln("Balancing cooldown finished, ready to balance again.");
-    }
-  }
-
   float lowestVoltage = getLowestCellVoltage();
 
   // Always update active target to lowest + 2mV (User Request)
@@ -1143,8 +1113,7 @@ void updateBalancing()
   {
     // Start balancing
     balancingActive = true;
-    balancingCycleTimer = millis();       // Start duty cycle timer
-    lastBalancingFeedbackTime = millis(); // Reset timeout timer
+    balancingCycleTimer = millis(); // Start duty cycle timer
     telnetPrintf("Starting balancing: Lowest=%.3fV, Highest=%.3fV, Diff=%.1fmV\n",
                  lowestVoltage, highestVoltage, difference_mV);
   }
@@ -1344,11 +1313,6 @@ void performBroadcast()
     {
       status = "BALANCING";
     }
-  }
-  else if (balancingCooldownStartTime > 0)
-  {
-    unsigned long remainingCooldown = (BALANCING_COOLDOWN_MS - (millis() - balancingCooldownStartTime)) / 1000 / 60;
-    status = "COOLDOWN (" + String(remainingCooldown) + "m)";
   }
   else
   {
