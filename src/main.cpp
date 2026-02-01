@@ -2562,7 +2562,6 @@ void setup()
   Serial.printf("- Suffix: '%s'\n", controllerSuffix.c_str());
   Serial.printf("- Auto Start: %s\n", autoModeAtStartup ? "YES" : "NO");
   Serial.printf("- MQTT Enabled: %s\n", mqttEnabled ? "YES" : "NO");
-  Serial.printf("- Feedback Limit: %s\n", balancingFeedbackLimit ? "YES" : "NO");
 
   Serial.println("\n\n=================================");
   Serial.println("BMW i3 Balancing Controller");
