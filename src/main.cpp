@@ -86,10 +86,10 @@ struct BMWModule
 // Global variables
 BMWModule modules[MAX_MODULES];
 bool balancingActive = false;
-bool manualMode = true;  // Start in MANUAL mode - gateway mode, no automatic balancing
-bool autoModeAtStartup = false; // Setting: Start in Auto mode?
-bool gatewayMode = true; // GATEWAY: Forward messages between BMS and slave modules
-bool mqttEnabled = false; // Setting: Enable/Disable MQTT
+bool manualMode = true;              // Start in MANUAL mode - gateway mode, no automatic balancing
+bool autoModeAtStartup = false;      // Setting: Start in Auto mode?
+bool gatewayMode = true;             // GATEWAY: Forward messages between BMS and slave modules
+bool mqttEnabled = false;            // Setting: Enable/Disable MQTT
 bool balancingFeedbackLimit = false; // Setting: Stop balancing if no feedback (0x10X)
 bool externalMasterDetected = false;
 bool canDebugTwaiEnabled = false;    // TWAI (BMS) debug logging - DISABLED by default
@@ -112,8 +112,8 @@ const unsigned long BALANCING_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour cooldown a
 // Balancing duty cycle (Run 15m / Pause 5m)
 bool balancingPaused = false;
 unsigned long balancingCycleTimer = 0;
-const unsigned long BALANCE_RUN_TIME_MS = 15 * 60 * 1000;   // 15 minutes continuous
-const unsigned long BALANCE_PAUSE_TIME_MS = 5 * 60 * 1000;  // 5 minutes pause
+const unsigned long BALANCE_RUN_TIME_MS = 15 * 60 * 1000;  // 15 minutes continuous
+const unsigned long BALANCE_PAUSE_TIME_MS = 5 * 60 * 1000; // 5 minutes pause
 
 // (Unused legacy variables removed)
 
@@ -232,19 +232,23 @@ void checkTelnetClient()
 }
 
 // MQTT Helper: Get base topic with suffix
-String getBaseTopic() {
+String getBaseTopic()
+{
   String topic = "bmw_i3_bms";
-  if (controllerSuffix.length() > 0) {
+  if (controllerSuffix.length() > 0)
+  {
     topic += "_" + controllerSuffix;
   }
   return topic;
 }
 
 // MQTT Helper: Send Home Assistant Discovery payloads
-void sendHADiscovery() {
+void sendHADiscovery()
+{
   String nodeId = "bmw_i3_bms";
   String deviceName = "BMW i3 BMS";
-  if (controllerSuffix.length() > 0) {
+  if (controllerSuffix.length() > 0)
+  {
     nodeId += "_" + controllerSuffix;
     deviceName += " " + controllerSuffix;
   }
@@ -254,33 +258,37 @@ void sendHADiscovery() {
 
   // Common device config
   JsonObject deviceParams; // Use object inside the loop directly or helper
-  
+
   // Define sensors to discover
-  struct SensorConfig {
-    const char* id;
-    const char* name;
-    const char* unit;
-    const char* devClass;
-    const char* valueTpl;
+  struct SensorConfig
+  {
+    const char *id;
+    const char *name;
+    const char *unit;
+    const char *devClass;
+    const char *valueTpl;
   };
 
   SensorConfig sensors[] = {
-    {"volt_min", "Lowest Voltage", "V", "voltage", "{{ value_json.voltage_lowest }}"},
-    {"volt_max", "Highest Voltage", "V", "voltage", "{{ value_json.voltage_highest }}"},
-    {"volt_diff", "Cell Diff", "mV", "voltage", "{{ value_json.voltage_diff_mv }}"},
-    {"status", "Status", "", "", "{{ value_json.status }}"},
-    {"sys_stat", "System Status", "", "", "{{ value_json.system_status }}"}
-  };
+      {"volt_min", "Lowest Voltage", "V", "voltage", "{{ value_json.voltage_lowest }}"},
+      {"volt_max", "Highest Voltage", "V", "voltage", "{{ value_json.voltage_highest }}"},
+      {"volt_diff", "Cell Diff", "mV", "voltage", "{{ value_json.voltage_diff_mv }}"},
+      {"status", "Status", "", "", "{{ value_json.status }}"},
+      {"mode", "Auto Mode", "", "", "{{ 'Auto' if value_json.auto_mode else 'Manual' }}"},
+      {"sys_stat", "System Status", "", "", "{{ value_json.system_status }}"}};
 
-  for (const auto& s : sensors) {
+  for (const auto &s : sensors)
+  {
     JsonDocument doc;
     doc["name"] = s.name;
     doc["stat_t"] = stateTopic;
     doc["val_tpl"] = s.valueTpl;
-    if (strlen(s.unit) > 0) doc["unit_of_meas"] = s.unit;
-    if (strlen(s.devClass) > 0) doc["dev_cla"] = s.devClass;
+    if (strlen(s.unit) > 0)
+      doc["unit_of_meas"] = s.unit;
+    if (strlen(s.devClass) > 0)
+      doc["dev_cla"] = s.devClass;
     doc["uniq_id"] = nodeId + "_" + s.id;
-    
+
     JsonObject dev = doc["dev"].to<JsonObject>();
     dev["ids"] = nodeId;
     dev["name"] = deviceName;
@@ -289,33 +297,13 @@ void sendHADiscovery() {
     dev["sw"] = "1.2";
 
     String topic = "homeassistant/sensor/" + nodeId + "/" + s.id + "/config";
-    char buffer[512];
-    serializeJson(doc, buffer);
-    mqttClient.publish(topic.c_str(), buffer, true);
+    char buffer[1024];
+    size_t n = serializeJson(doc, buffer);
+    if (!mqttClient.publish(topic.c_str(), buffer, true))
+    {
+      telnetPrintf("MQTT: Failed to publish discovery for %s (len=%d)\n", s.id, n);
+    }
     delay(10); // Slack for network
-  }
-  
-  // Binary Sensor: Auto Mode
-  {
-    JsonDocument doc;
-    doc["name"] = "Auto Mode";
-    doc["stat_t"] = stateTopic;
-    doc["val_tpl"] = "{{ value_json.auto_mode }}";
-    doc["pl_on"] = "true";
-    doc["pl_off"] = "false";
-    doc["uniq_id"] = nodeId + "_auto_mode";
-    
-    JsonObject dev = doc["dev"].to<JsonObject>();
-    dev["ids"] = nodeId;
-    dev["name"] = deviceName;
-    dev["mf"] = "BMW/LilyGO";
-    dev["mdl"] = "T-2CAN";
-    dev["sw"] = "1.2";
-    
-    String topic = "homeassistant/binary_sensor/" + nodeId + "/auto_mode/config";
-    char buffer[512];
-    serializeJson(doc, buffer);
-    mqttClient.publish(topic.c_str(), buffer, true);
   }
 
   telnetPrintln("MQTT: Sent Home Assistant Discovery payloads");
@@ -324,7 +312,8 @@ void sendHADiscovery() {
 // MQTT Functions
 void reconnectMQTT()
 {
-  if (!mqttEnabled) return;
+  if (!mqttEnabled)
+    return;
 
   if (!mqttClient.connected())
   {
@@ -332,15 +321,19 @@ void reconnectMQTT()
 
     // Construct unique Client ID based on suffix
     String clientId = "BMW-i3-BMS";
-    if (controllerSuffix.length() > 0) {
-        clientId += "-" + controllerSuffix;
+    if (controllerSuffix.length() > 0)
+    {
+      clientId += "-" + controllerSuffix;
     }
 
     // Check if MQTT credentials are provided
-    if (String(MQTT_USER).length() > 0) {
-       connected = mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASSWORD);
-    } else {
-       connected = mqttClient.connect(clientId.c_str());
+    if (String(MQTT_USER).length() > 0)
+    {
+      connected = mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASSWORD);
+    }
+    else
+    {
+      connected = mqttClient.connect(clientId.c_str());
     }
 
     if (connected)
@@ -355,7 +348,8 @@ void reconnectMQTT()
 
 void processMQTT()
 {
-  if (!mqttEnabled) return;
+  if (!mqttEnabled)
+    return;
 
   if (WiFi.status() != WL_CONNECTED)
     return;
@@ -376,7 +370,7 @@ void processMQTT()
     if (millis() - lastMqttPublish > MQTT_PUBLISH_INTERVAL)
     {
       lastMqttPublish = millis();
-      
+
       // Publish Status
       JsonDocument doc;
 
@@ -390,26 +384,28 @@ void processMQTT()
           break;
         }
       }
-      if (millis() < 5000) hasError = false;
-      
+      if (millis() < 5000)
+        hasError = false;
+
       // Basic Status
       doc["status"] = balancingActive ? (balancingPaused ? "BALANCING_PAUSED" : "BALANCING") : "IDLE";
-      if (balancingCooldownStartTime > 0) doc["status"] = "COOLDOWN";
-      
+      if (balancingCooldownStartTime > 0)
+        doc["status"] = "COOLDOWN";
+
       doc["system_status"] = hasError ? "Error" : "System OK";
 
       doc["auto_mode"] = !manualMode;
-      
+
       float lowest = getLowestCellVoltage();
       float highest = getHighestCellVoltage();
-      
-      doc["voltage_lowest"] = lowest;
-      doc["voltage_highest"] = highest;
-      doc["voltage_diff_mv"] = (highest - lowest) * 1000.0f;
-      
+
+      doc["voltage_lowest"] = serialized(String(lowest, 3));
+      doc["voltage_highest"] = serialized(String(highest, 3));
+      doc["voltage_diff_mv"] = serialized(String((highest - lowest) * 1000.0f, 0));
+
       char buffer[512];
       serializeJson(doc, buffer);
-      
+
       String topic = getBaseTopic() + "/metrics";
       mqttClient.publish(topic.c_str(), buffer);
     }
@@ -708,6 +704,26 @@ void readCANMessages()
   int mcp_rx_count = 0;
   while (readCAN2(mcp_id, mcp_len, mcp_data) && mcp_rx_count++ < 30)
   {
+    // Debug output for MCP2515 RX
+    if (canDebugMcp2515Enabled)
+    {
+      static uint32_t lastMcpDebug = 0;
+      if (millis() - lastMcpDebug > 200) // Only every 200ms
+      {
+        lastMcpDebug = millis();
+        char debugBuf[128];
+        float ts = millis() / 1000.0f;
+        int offset = snprintf(debugBuf, sizeof(debugBuf), "[%08.3f] [MCP2515 RX] 0x%03X [%d] ", ts, mcp_id, mcp_len);
+        for (int i = 0; i < mcp_len; i++)
+        {
+          offset += snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%02X ", mcp_data[i]);
+        }
+        snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "\n");
+        telnetPrintf("%s", debugBuf);
+        Serial.print(debugBuf);
+      }
+    }
+
     // Parse module data for monitoring (0x100-0x1FF)
     if ((mcp_id & 0xF00) == 0x100)
     {
@@ -738,25 +754,58 @@ void readCANMessages()
         // NOTE: Do NOT mask 0x160-0x177 (balance status, temperatures, diagnostics)
         if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6)
         {
-          // Check if any bit 7 is set before masking
-          bool needsRecalc = (forward_msg.data[1] & 0x80) || (forward_msg.data[3] & 0x80) || (forward_msg.data[5] & 0x80);
+          int moduleIdx = mcp_id & 0x0F;
+          uint8_t cellBase = 0;
+          if (mcp_id >= 0x130 && mcp_id <= 0x13F)
+            cellBase = 3;
+          else if (mcp_id >= 0x140 && mcp_id <= 0x14F)
+            cellBase = 6;
+          else if (mcp_id >= 0x150 && mcp_id <= 0x15F)
+            cellBase = 9;
 
-          forward_msg.data[1] &= 0x7F; // Cell 1 high byte - clear bit 7
-          forward_msg.data[3] &= 0x7F; // Cell 2 high byte - clear bit 7
-          forward_msg.data[5] &= 0x7F; // Cell 3 high byte - clear bit 7
-                                       // Byte 6 (counter) is NOT modified
+          // Tjek om balancing er aktiv på denne modul (bit 7 sat i en af spændingsbytes)
+          bool balancingFlagSet = (mcp_data[1] & 0x80) || (mcp_data[3] & 0x80) || (mcp_data[5] & 0x80);
 
-          // Only recalculate CRC if we actually changed the data
-          if (needsRecalc)
+          // Hvis vi balancerer OG modulet har balance-flag sat, så ignorer de rå mcp_data 
+          // og byg pakken fra de stabile værdier vi har i 'modules' (dem som WebUI også bruger)
+          if (balancingActive && !balancingPaused && balancingFlagSet)
           {
-            forward_msg.data[forward_msg.data_length_code - 1] = calculateChecksum(forward_msg);
-            /*
-            if (canDebugTwaiEnabled)
+            // Kopier KUN byte 6 (counter) - checksum beregnes bagefter
+            forward_msg.data[6] = mcp_data[6];
+            
+            // Overskriv cellespændingerne (byte 0-5) med stabile værdier
+            for (int i = 0; i < 3; i++)
             {
-              telnetPrintf("[MASK] 0x%03X - cleared bit 7 from voltage bytes\n", mcp_id);
+              // Konverter float spænding tilbage til det format BMS forventer (14-bit millivolt)
+              uint16_t v = (uint16_t)(modules[moduleIdx].cellVoltages[cellBase + i] * 1000.0f);
+              forward_msg.data[i * 2] = v & 0xFF;
+              forward_msg.data[i * 2 + 1] = (v >> 8); // Ingen maske nødvendig - float værdier har aldrig bit 6/7 sat
             }
-            */
           }
+          else if (balancingFlagSet)
+          {
+            // Balance-flag er sat, men vi override ikke - bare maskér bit 7 ud
+            for (int i = 0; i < mcp_len; i++)
+            {
+              forward_msg.data[i] = mcp_data[i];
+            }
+            forward_msg.data[1] &= 0x7F;
+            forward_msg.data[3] &= 0x7F;
+            forward_msg.data[5] &= 0x7F;
+          }
+          else
+          {
+            // Ingen balance-flag sat - bare kopier data uændret
+            for (int i = 0; i < mcp_len; i++)
+            {
+              forward_msg.data[i] = mcp_data[i];
+            }
+          }
+
+          // Beregn ny checksum da data er ændret
+          forward_msg.data[mcp_len - 1] = calculateChecksum(forward_msg);
+          twai_transmit(&forward_msg, pdMS_TO_TICKS(10));
+          continue; // Vigtigt: Hop videre så linje 715 ikke sender pakken igen
         }
 
         // Mask balance status in 0x10X messages (byte 3, 4 and 5 contain balance status)
@@ -818,12 +867,16 @@ void readCANMessages()
         // Debug output for forwarding
         if (canDebugTwaiEnabled)
         {
-          Serial.printf("[TWAI    TX] 0x%03X [%d] ", forward_msg.identifier, forward_msg.data_length_code);
+          char debugBuf[128];
+          float ts = millis() / 1000.0f;
+          int offset = snprintf(debugBuf, sizeof(debugBuf), "[%08.3f] [TWAI    TX] 0x%03X [%d] ", ts, forward_msg.identifier, forward_msg.data_length_code);
           for (int i = 0; i < forward_msg.data_length_code; i++)
           {
-            Serial.printf("%02X ", forward_msg.data[i]);
+            offset += snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%02X ", forward_msg.data[i]);
           }
-          Serial.printf("%s\n", result == ESP_OK ? "OK" : "FAIL");
+          snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%s\n", result == ESP_OK ? "OK" : "FAIL");
+          telnetPrintf("%s", debugBuf);
+          Serial.print(debugBuf);
         }
       }
     }
@@ -845,12 +898,16 @@ void readCANMessages()
       if (millis() - lastTwaiDebug > 200) // Only every 200ms
       {
         lastTwaiDebug = millis();
-        Serial.printf("[TWAI    RX] 0x%03X [%d] ", id, twai_msg.data_length_code);
+        char debugBuf[128];
+        float ts = millis() / 1000.0f;
+        int offset = snprintf(debugBuf, sizeof(debugBuf), "[%08.3f] [TWAI    RX] 0x%03X [%d] ", ts, id, twai_msg.data_length_code);
         for (int i = 0; i < twai_msg.data_length_code; i++)
         {
-          Serial.printf("%02X ", twai_msg.data[i]);
+          offset += snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%02X ", twai_msg.data[i]);
         }
-        Serial.println("");
+        snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "\n");
+        telnetPrintf("%s", debugBuf);
+        Serial.print(debugBuf);
       }
     }
 
@@ -873,6 +930,8 @@ void readCANMessages()
       // Only enable balancing if active AND not in cooling pause
       if (balancingActive && !balancingPaused && twai_msg.data_length_code >= 8)
       {
+        send_data[2] = 0x00;
+        send_data[3] = 0x50;
         send_data[4] = 0x08; // Enable balancing
 
         // Set target voltage to lowest cell + 2mV
@@ -952,6 +1011,10 @@ float getLowestCellVoltage()
       continue;
     for (int c = 0; c < CELLS_PER_MODULE; c++)
     {
+      // Ignore Cell 96 (Module 8, Cell 12 in 1-based / m=7, c=11 in 0-based)
+      //if (m == 7 && c == 11)
+      //  continue;
+
       if (modules[m].cellVoltages[c] > 0.5f && modules[m].cellVoltages[c] < lowest)
       {
         lowest = modules[m].cellVoltages[c];
@@ -972,6 +1035,10 @@ float getHighestCellVoltage()
       continue;
     for (int c = 0; c < CELLS_PER_MODULE; c++)
     {
+      // Ignore Cell 96 (Module 8, Cell 12 in 1-based / m=7, c=11 in 0-based)
+      //if (m == 7 && c == 11)
+      //  continue;
+
       if (modules[m].cellVoltages[c] > highest)
       {
         highest = modules[m].cellVoltages[c];
@@ -1074,10 +1141,11 @@ void updateBalancing()
   }
 
   float lowestVoltage = getLowestCellVoltage();
-  
+
   // Always update active target to lowest + 2mV (User Request)
-  if (lowestVoltage > 0.5f) {
-      activeTargetVoltage = lowestVoltage + 0.002f;
+  if (lowestVoltage > 0.5f)
+  {
+    activeTargetVoltage = lowestVoltage + 0.002f;
   }
 
   float highestVoltage = getHighestCellVoltage();
@@ -1200,24 +1268,24 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
           }
           if (doc["autoModeAtStartup"].is<bool>())
           {
-             autoModeAtStartup = doc["autoModeAtStartup"];
-             preferences.putBool("autoStart", autoModeAtStartup);
-             Serial.printf("Auto Start set to %s\n", autoModeAtStartup ? "YES" : "NO");
-             changed = true;
+            autoModeAtStartup = doc["autoModeAtStartup"];
+            preferences.putBool("autoStart", autoModeAtStartup);
+            Serial.printf("Auto Start set to %s\n", autoModeAtStartup ? "YES" : "NO");
+            changed = true;
           }
-           if (doc["balancingFeedbackLimit"].is<bool>())
+          if (doc["balancingFeedbackLimit"].is<bool>())
           {
-             balancingFeedbackLimit = doc["balancingFeedbackLimit"];
-             preferences.putBool("feedbackLimit", balancingFeedbackLimit);
-             Serial.printf("Feedback Limit set to %s\n", balancingFeedbackLimit ? "YES" : "NO");
-             changed = true;
+            balancingFeedbackLimit = doc["balancingFeedbackLimit"];
+            preferences.putBool("feedbackLimit", balancingFeedbackLimit);
+            Serial.printf("Feedback Limit set to %s\n", balancingFeedbackLimit ? "YES" : "NO");
+            changed = true;
           }
           if (doc["mqttEnabled"].is<bool>())
           {
-             mqttEnabled = doc["mqttEnabled"];
-             preferences.putBool("mqttEnabled", mqttEnabled);
-             Serial.printf("MQTT Enabled set to %s\n", mqttEnabled ? "YES" : "NO");
-             changed = true;
+            mqttEnabled = doc["mqttEnabled"];
+            preferences.putBool("mqttEnabled", mqttEnabled);
+            Serial.printf("MQTT Enabled set to %s\n", mqttEnabled ? "YES" : "NO");
+            changed = true;
           }
 
           if (changed)
@@ -1254,6 +1322,10 @@ void performBroadcast()
 
     for (int c = 0; c < CELLS_PER_MODULE; c++)
     {
+      // Ignore Cell 96 (Module 8, Cell 12 in 1-based / m=7, c=11 in 0-based)
+      //if (m == 7 && c == 11)
+      //  continue;
+
       if (modules[m].cellVoltages[c] > 0.5f && modules[m].cellVoltages[c] < lowestVoltage)
       {
         lowestVoltage = modules[m].cellVoltages[c];
@@ -1300,10 +1372,13 @@ void performBroadcast()
   }
   else
   {
-    if (!manualMode) {
-        status = "IDLE";
-    } else {
-        status = "GATEWAY";
+    if (manualMode)
+    {
+      status = "GATEWAY";
+    }
+    else
+    {
+      status = "IDLE";
     }
   }
 
@@ -1349,7 +1424,8 @@ void performBroadcast()
     JsonObject moduleObj = modulesArray.add<JsonObject>();
     moduleObj["id"] = m + 1;
     moduleObj["voltage"] = modules[m].moduleVoltage;
-    moduleObj["balancing"] = (modules[m].balanceStatus != 0); // Use balanceStatus from 0x10X byte 4-5 (same as SimpleBMS)
+    moduleObj["balancing"] = (modules[m].balanceStatus != 0);
+    moduleObj["balanceStatus"] = modules[m].balanceStatus; // Send the bitmask
     moduleObj["error"] = modules[m].errorCode;
 
     JsonArray cellsArray = moduleObj["cells"].to<JsonArray>();
@@ -1502,6 +1578,24 @@ const char index_html[] PROGMEM = R"rawliteral(
             backdrop-filter: blur(10px);
             border-radius: 15px;
             padding: 15px;
+            transition: all 0.3s ease;
+        }
+        .module.error {
+            border: 1px solid #ef4444;
+            box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);
+        }
+        .module-error-badge {
+            background: #ef4444;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7em;
+            margin-left: 10px;
+            cursor: help;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            vertical-align: middle;
         }
         .module-header {
             display: flex;
@@ -1528,6 +1622,18 @@ const char index_html[] PROGMEM = R"rawliteral(
         }
         .balance-indicator.inactive {
             background: rgba(255,255,255,0.2);
+        }
+        .balancing-cell-indicator {
+            display: inline-block;
+            margin-left: 5px;
+            color: #4ade80;
+            font-weight: bold;
+            animation: blink 1s infinite;
+        }
+        @keyframes blink {
+            0% { opacity: 1; }
+            50% { opacity: 0; }
+            100% { opacity: 1; }
         }
         @keyframes pulse {
             0%, 100% { opacity: 1; }
@@ -1951,7 +2057,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                         <div class="setting-input-group">
                             <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
                                 <input type="checkbox" id="balancingFeedbackLimit" style="width: 20px; height: 20px;">
-                                <span style="font-size: 0.9em; opacity: 0.8;">Stop if 15m without feedback</span>   
+                                <span style="font-size: 0.9em; opacity: 0.8;">Stop if 15m without feedback</span>
                             </label>
                         </div>
                     </div>
@@ -1965,7 +2071,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                         </div>
                     </div>
                 </div>
-                
+
                 <div style="display: flex; justify-content: center; margin-top: 15px;">
                     <button onclick="updateSettings()">💾 Save Settings</button>
                 </div>
@@ -2104,6 +2210,51 @@ const char index_html[] PROGMEM = R"rawliteral(
                 }
                 titleDiv.innerHTML = 'Module ' + module.id + voltageText;
                 
+                if (module.error > 0) {
+                    const errorBadge = document.createElement('span');
+                    errorBadge.className = 'module-error-badge';
+                    errorBadge.textContent = '⚠️ 0x' + module.error.toString(16).toUpperCase();
+                    
+                    // Decoder for BMW i3 / SimpBMS Error Codes
+                    // Based on BMSModuleManager.cpp (Faults = Byte 0, Alerts = Byte 1)
+                    let errors = [];
+                    
+                    // Byte 0: Faults
+                    if (module.error & 0x01) errors.push("Over Voltage");
+                    if (module.error & 0x02) errors.push("Under Voltage");
+                    if (module.error & 0x04) errors.push("CRC Error");
+                    if (module.error & 0x08) errors.push("Power-On Reset");
+                    if (module.error & 0x10) errors.push("Test Fault");
+                    if (module.error & 0x20) errors.push("Internal Regs Inconsistent");
+                    
+                    // Byte 1: Alerts (Shifted by 8 bits)
+                    if (module.error & 0x100) errors.push("Over Temp (TS1)");
+                    if (module.error & 0x200) errors.push("Over Temp (TS2)");
+                    if (module.error & 0x400) errors.push("Sleep Mode");
+                    if (module.error & 0x800) errors.push("Thermal Shutdown");
+                    if (module.error & 0x1000) errors.push("Test Alert");
+                    if (module.error & 0x2000) errors.push("OTP EPROM/Media Error");
+                    if (module.error & 0x4000) errors.push("Group3 Regs Invalid");
+                    if (module.error & 0x8000) errors.push("Address Not Reg");
+
+                    let errorDesc = errors.length > 0 ? errors.join(", ") : 'Unknown Error';
+                    errorDesc += ' (0x' + module.error.toString(16).toUpperCase() + ')';
+                    
+                    errorBadge.title = errorDesc;
+                    // Also show as text if specific errors found
+                    if (errors.length > 0) {
+                         const errorText = document.createElement('span');
+                         errorText.style.fontSize = '0.7em';
+                         errorText.style.marginLeft = '8px';
+                         errorText.style.opacity = '0.8';
+                         errorText.textContent = errors[0] + (errors.length > 1 ? ' +' : '');
+                         titleDiv.appendChild(errorText);
+                    }
+                    
+                    titleDiv.appendChild(errorBadge);
+                    moduleDiv.classList.add('error');
+                }
+
                 headerDiv.appendChild(titleDiv);
 
                 if (module.balancing) {
@@ -2126,7 +2277,11 @@ const char index_html[] PROGMEM = R"rawliteral(
                     
                     const labelDiv = document.createElement('div');
                     labelDiv.className = 'cell-label';
-                    labelDiv.textContent = 'Cell ' + (index + 1);
+                    labelDiv.innerHTML = 'Cell ' + (index + 1);
+
+                    if (module.balanceStatus && ((module.balanceStatus >> index) & 1)) {
+                        labelDiv.innerHTML += '<span class="balancing-cell-indicator">B</span>';
+                    }
                     
                     const voltageDiv = document.createElement('div');
                     voltageDiv.className = 'cell-voltage';
@@ -2212,10 +2367,16 @@ const char index_html[] PROGMEM = R"rawliteral(
             
             if (allCells.length === 0) return;
             
-            // Find min and max voltages
-            const voltages = allCells.map(c => c.voltage);
-            const minVoltage = Math.min(...voltages);
-            const maxVoltage = Math.max(...voltages);
+            // Calculate stats for scaling and highlighting separately
+            // Ignore Module 8 Cell 12 (m=8, c=12) for highlighting statistics
+            const validCells = allCells.filter(c => !(c.moduleId === 8 && c.cellIndex === 12));
+            
+            // If no valid cells (unlikely), fallback to all cells
+            const cellsForStats = validCells.length > 0 ? validCells : allCells;
+            const validVoltages = cellsForStats.map(c => c.voltage);
+            
+            const minVoltage = Math.min(...validVoltages);
+            const maxVoltage = Math.max(...validVoltages);
             const voltageRange = maxVoltage - minVoltage;
             
             // Create bars for each cell
@@ -2223,22 +2384,36 @@ const char index_html[] PROGMEM = R"rawliteral(
                 const bar = document.createElement('div');
                 bar.className = 'cell-bar';
                 
-                // Calculate height (percentage of max voltage)
-                const heightPercent = voltageRange > 0 
-                    ? ((cell.voltage - minVoltage) / voltageRange) * 100 
-                    : 100;
-                bar.style.height = Math.max(5, heightPercent) + '%';
+                // Calculate height relative to the VALID voltage range
+                // If the ignored cell is out of range, clamp it to 5% min height
+                let heightPercent = 100;
+                if (voltageRange > 0) {
+                    heightPercent = ((cell.voltage - minVoltage) / voltageRange) * 100;
+                }
+                bar.style.height = Math.max(5, Math.min(100, heightPercent)) + '%';
                 
-                // Highlight lowest and highest
-                if (cell.voltage === minVoltage) {
-                    bar.classList.add('lowest');
-                } else if (cell.voltage === maxVoltage) {
-                    bar.classList.add('highest');
+                // Check if this cell is the ignored one
+                const isIgnored = (cell.moduleId === 8 && cell.cellIndex === 12);
+                
+                // Highlight lowest and highest - ONLY if not the ignored cell
+                if (!isIgnored) {
+                    if (cell.voltage <= minVoltage + 0.001) { // Fuzzy match for float
+                        bar.classList.add('lowest');
+                    } else if (cell.voltage >= maxVoltage - 0.001) {
+                        bar.classList.add('highest');
+                    }
+                } else {
+                    // Optional: distinct visual style for ignored cell?
+                    bar.style.opacity = '0.7'; 
+                    bar.style.background = '#888'; // Greyout
                 }
                 
+                // Add tooltip
                 const tooltip = document.createElement('div');
                 tooltip.className = 'cell-bar-tooltip';
-                tooltip.textContent = `M${cell.moduleId} C${cell.cellIndex}: ${cell.voltage.toFixed(3)}V`;
+                let tooltipText = `M${cell.moduleId} C${cell.cellIndex}: ${cell.voltage.toFixed(3)}V`;
+                if (isIgnored) tooltipText += ' (Ignored)';
+                tooltip.textContent = tooltipText;
                 bar.appendChild(tooltip);
                 
                 chartContainer.appendChild(bar);
@@ -2407,7 +2582,8 @@ void setup()
   balancingFeedbackLimit = preferences.getBool("feedbackLimit", false);
 
   // Apply auto mode at startup if enabled
-  if (autoModeAtStartup) {
+  if (autoModeAtStartup)
+  {
     manualMode = false;
   }
 
@@ -2479,10 +2655,10 @@ void setup()
   if (WiFi.status() == WL_CONNECTED)
   {
     Serial.println("\n✓ WiFi connected!");
-    
+
     // Configure MQTT Server
     mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
-    
+
     IPAddress IP = WiFi.localIP();
     Serial.print("IP address: ");
     Serial.println(IP);
@@ -2545,9 +2721,6 @@ void setup()
   server.begin();
   Serial.println("Web server started");
 
-  // Initialize MQTT
-  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
-
   Serial.println("\n✓ Setup complete!");
   Serial.println("\nGateway Architecture:");
   Serial.println("  TWAI (BMS) <-> ESP32 <-> MCP2515 (Slave Modules)");
@@ -2564,7 +2737,6 @@ void loop()
 {
   // OTA DISABLED - ArduinoOTA.handle() removed to prevent mutex conflicts
 
-  // Process MQTT
   // Check for telnet clients
   checkTelnetClient();
 

@@ -147,12 +147,15 @@ inline bool sendCAN2(uint32_t id, uint8_t len, uint8_t *data)
     if (millis() - lastDebug > 200 || !success)
     { // Only every 200ms or on failure
       lastDebug = millis();
-      Serial.printf("[MCP2515 TX] 0x%03X [%d] ", id, len);
+      char debugBuf[128];
+      int offset = snprintf(debugBuf, sizeof(debugBuf), "[MCP2515 TX] 0x%03X [%d] ", id, len);
       for (int i = 0; i < len; i++)
       {
-        Serial.printf("%02X ", data[i]);
+        offset += snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%02X ", data[i]);
       }
-      Serial.printf("%s (%lu total)\n", success ? "OK" : "FAIL", ++debugCount);
+      snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%s (%lu total)\n", success ? "OK" : "FAIL", ++debugCount);
+      telnetPrintf("%s", debugBuf);
+      Serial.print(debugBuf);
     }
   }
 
@@ -177,12 +180,15 @@ inline bool readCAN2(uint32_t &id, uint8_t &len, uint8_t *data)
     // Debug output for RX (always show to debug slave responses)
     if (canDebugMcp2515Enabled)
     {
-      Serial.printf("[MCP2515 RX] 0x%03X [%d] ", id, len);
+      char debugBuf[128];
+      int offset = snprintf(debugBuf, sizeof(debugBuf), "[MCP2515 RX] 0x%03X [%d] ", id, len);
       for (int i = 0; i < len; i++)
       {
-        Serial.printf("%02X ", data[i]);
+        offset += snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%02X ", data[i]);
       }
-      Serial.println("");
+      snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "\n");
+      telnetPrintf("%s", debugBuf);
+      Serial.print(debugBuf);
     }
 
     return true;
