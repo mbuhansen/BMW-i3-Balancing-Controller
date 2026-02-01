@@ -90,7 +90,6 @@ bool manualMode = true;              // Start in MANUAL mode - gateway mode, no 
 bool autoModeAtStartup = false;      // Setting: Start in Auto mode?
 bool gatewayMode = true;             // GATEWAY: Forward messages between BMS and slave modules
 bool mqttEnabled = false;            // Setting: Enable/Disable MQTT
-bool balancingFeedbackLimit = false; // Setting: Stop balancing if no feedback (0x10X)
 bool externalMasterDetected = false;
 bool canDebugTwaiEnabled = false;    // TWAI (BMS) debug logging - DISABLED by default
 bool canDebugMcp2515Enabled = false; // MCP2515 (slave modules) debug logging - DISABLED by default
@@ -1112,18 +1111,6 @@ void updateBalancing()
     balancingCycleTimer = millis();
   }
 
-  // Check timeout while balancing active
-  if (balancingActive && balancingFeedbackLimit)
-  {
-    if (millis() - lastBalancingFeedbackTime > BALANCING_TIMEOUT_MS)
-    {
-      balancingActive = false;
-      balancingCooldownStartTime = millis();
-      telnetPrintf("Stopping balancing: Timeout (no feedback for 15m). Waiting 1h.\n");
-      return;
-    }
-  }
-
   // Check cooldown if not active (prevent restart)
   if (!balancingActive && balancingCooldownStartTime > 0)
   {
@@ -1273,13 +1260,6 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
             Serial.printf("Auto Start set to %s\n", autoModeAtStartup ? "YES" : "NO");
             changed = true;
           }
-          if (doc["balancingFeedbackLimit"].is<bool>())
-          {
-            balancingFeedbackLimit = doc["balancingFeedbackLimit"];
-            preferences.putBool("feedbackLimit", balancingFeedbackLimit);
-            Serial.printf("Feedback Limit set to %s\n", balancingFeedbackLimit ? "YES" : "NO");
-            changed = true;
-          }
           if (doc["mqttEnabled"].is<bool>())
           {
             mqttEnabled = doc["mqttEnabled"];
@@ -1412,7 +1392,6 @@ void performBroadcast()
   doc["controllerSuffix"] = controllerSuffix;
   doc["autoModeAtStartup"] = autoModeAtStartup;
   doc["mqttEnabled"] = mqttEnabled;
-  doc["balancingFeedbackLimit"] = balancingFeedbackLimit;
 
   JsonArray modulesArray = doc["modules"].to<JsonArray>();
 
@@ -2057,15 +2036,6 @@ const char index_html[] PROGMEM = R"rawliteral(
                         </div>
                     </div>
                     <div class="setting-item">
-                        <div class="setting-label">Feedback Timeout</div>
-                        <div class="setting-input-group">
-                            <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                                <input type="checkbox" id="balancingFeedbackLimit" style="width: 20px; height: 20px;">
-                                <span style="font-size: 0.9em; opacity: 0.8;">Stop if 15m without feedback</span>
-                            </label>
-                        </div>
-                    </div>
-                    <div class="setting-item">
                         <div class="setting-label">MQTT Integration</div>
                         <div class="setting-input-group">
                             <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
@@ -2137,9 +2107,6 @@ const char index_html[] PROGMEM = R"rawliteral(
             }
             if (data.autoModeAtStartup !== undefined) {
                  document.getElementById('autoModeAtStartup').checked = data.autoModeAtStartup;
-            }
-            if (data.balancingFeedbackLimit !== undefined) {
-                 document.getElementById('balancingFeedbackLimit').checked = data.balancingFeedbackLimit;
             }
             if (data.mqttEnabled !== undefined) {
                  document.getElementById('mqttEnabled').checked = data.mqttEnabled;
@@ -2452,7 +2419,6 @@ const char index_html[] PROGMEM = R"rawliteral(
             const balanceHysteresis = parseFloat(document.getElementById('balanceHysteresis').value);
             const controllerSuffix = document.getElementById('controllerSuffix').value;
             const autoModeAtStartup = document.getElementById('autoModeAtStartup').checked;
-            const balancingFeedbackLimit = document.getElementById('balancingFeedbackLimit').checked;
             const mqttEnabled = document.getElementById('mqttEnabled').checked;
             
             if (ws && ws.readyState === WebSocket.OPEN) {
@@ -2463,7 +2429,6 @@ const char index_html[] PROGMEM = R"rawliteral(
                     balanceHysteresis: balanceHysteresis,
                     controllerSuffix: controllerSuffix,
                     autoModeAtStartup: autoModeAtStartup,
-                    balancingFeedbackLimit: balancingFeedbackLimit,
                     mqttEnabled: mqttEnabled
                 }));
                 
@@ -2583,7 +2548,6 @@ void setup()
   controllerSuffix = preferences.getString("suffix", "");
   autoModeAtStartup = preferences.getBool("autoStart", false);
   mqttEnabled = preferences.getBool("mqttEnabled", false);
-  balancingFeedbackLimit = preferences.getBool("feedbackLimit", false);
 
   // Apply auto mode at startup if enabled
   if (autoModeAtStartup)
