@@ -1862,6 +1862,22 @@ const char index_html[] PROGMEM = R"rawliteral(
         .cell-bar:hover .cell-bar-tooltip {
             opacity: 1;
         }
+        .cell-bar-balancing-indicator {
+            position: absolute;
+            bottom: -8px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 10px;
+            height: 6px;
+            background: #22c55e;
+            border-radius: 2px;
+            box-shadow: 0 0 8px #22c55e;
+            animation: pulse-green 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse-green {
+            0%, 100% { opacity: 1; box-shadow: 0 0 8px #22c55e; }
+            50% { opacity: 0.6; box-shadow: 0 0 4px #22c55e; }
+        }
         .chart-legend {
             display: flex;
             justify-content: center;
@@ -2323,14 +2339,16 @@ const char index_html[] PROGMEM = R"rawliteral(
             const chartContainer = document.getElementById('cellChart');
             chartContainer.innerHTML = '';
             
-            // Collect all cell voltages
+            // Collect all cell voltages with balancing status
             let allCells = [];
             modules.forEach(module => {
                 module.cells.forEach((voltage, cellIndex) => {
+                    const isBalancing = module.balanceStatus && ((module.balanceStatus >> cellIndex) & 1);
                     allCells.push({
                         moduleId: module.id,
                         cellIndex: cellIndex + 1,
-                        voltage: voltage
+                        voltage: voltage,
+                        balancing: isBalancing
                     });
                 });
             });
@@ -2366,8 +2384,18 @@ const char index_html[] PROGMEM = R"rawliteral(
                 const tooltip = document.createElement('div');
                 tooltip.className = 'cell-bar-tooltip';
                 let tooltipText = `M${cell.moduleId} C${cell.cellIndex}: ${cell.voltage.toFixed(3)}V`;
+                if (cell.balancing) {
+                    tooltipText += ' [BALANCING]';
+                }
                 tooltip.textContent = tooltipText;
                 bar.appendChild(tooltip);
+                
+                // Add green balancing indicator if cell is balancing
+                if (cell.balancing) {
+                    const balancingIndicator = document.createElement('div');
+                    balancingIndicator.className = 'cell-bar-balancing-indicator';
+                    bar.appendChild(balancingIndicator);
+                }
                 
                 chartContainer.appendChild(bar);
             });
