@@ -1599,10 +1599,6 @@ const char index_html[] PROGMEM = R"rawliteral(
             border-radius: 4px;
             font-weight: bold;
             font-size: 0.85em;
-            animation: blink 2s infinite;
-        }
-        @keyframes blink {
-            0% { opacity: 1; }
         }
         .cells {
             display: grid;
