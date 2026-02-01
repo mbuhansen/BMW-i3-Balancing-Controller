@@ -1626,13 +1626,17 @@ const char index_html[] PROGMEM = R"rawliteral(
         .balancing-cell-indicator {
             display: inline-block;
             margin-left: 5px;
-            color: #4ade80;
+            background: #4ade80;
+            color: #000;
+            padding: 2px 6px;
+            border-radius: 4px;
             font-weight: bold;
-            animation: blink 1s infinite;
+            font-size: 0.85em;
+            animation: blink 2s infinite;
         }
         @keyframes blink {
             0% { opacity: 1; }
-            50% { opacity: 0; }
+            50% { opacity: 0.4; }
             100% { opacity: 1; }
         }
         @keyframes pulse {
