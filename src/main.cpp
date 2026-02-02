@@ -2356,10 +2356,11 @@ const char index_html[] PROGMEM = R"rawliteral(
                 const bar = document.createElement('div');
                 bar.className = 'cell-bar';
                 
-                // Calculate height relative to voltage range
-                let heightPercent = 100;
+                // Calculate height relative to the VALID voltage range
+                // If the ignored cell is out of range, clamp it to 5% min height
+                let heightPercent = 50;
                 if (voltageRange > 0) {
-                    heightPercent = ((cell.voltage - minVoltage) / voltageRange) * 100;
+                  heightPercent = ((cell.voltage - minVoltage) / voltageRange) * 100;
                 }
                 bar.style.height = Math.max(5, Math.min(100, heightPercent)) + '%';
                 
