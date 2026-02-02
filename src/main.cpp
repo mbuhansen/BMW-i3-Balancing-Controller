@@ -756,7 +756,7 @@ void readCANMessages()
         // BMS expects this bit clear, so mask it out for cell voltage messages (0x120-0x157)
         // NOTE: Byte 6 is a counter and must NOT be modified
         // NOTE: Do NOT mask 0x160-0x177 (balance status, temperatures, diagnostics)
-        if (mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6)
+        if (balancingActive && mcp_id >= 0x120 && mcp_id <= 0x157 && mcp_len >= 6)
         {
           int moduleIdx = mcp_id & 0x0F;
           uint8_t cellBase = 0;
@@ -814,7 +814,7 @@ void readCANMessages()
 
         // Mask balance status in 0x10X messages (byte 3, 4 and 5 contain balance status)
         // Clear ALL THREE bytes to hide balancing from BMS
-        if (mcp_id >= 0x100 && mcp_id <= 0x10F && mcp_len >= 6)
+        if (balancingActive && mcp_id >= 0x100 && mcp_id <= 0x10F && mcp_len >= 6)
         {
           // Check if any balance status is present (byte 3, 4 or 5 non-zero)
           if (forward_msg.data[3] != 0 || forward_msg.data[4] != 0 || forward_msg.data[5] != 0)
@@ -836,7 +836,7 @@ void readCANMessages()
         // OVERRIDE Module Voltage in 0x16X messages during balancing
         // When balancing, the measured module voltage (0x16X bytes 0-1) sags.
         // We replace it with the sum of the 12 individual cell voltages to report a stable voltage.
-        if (mcp_id >= 0x160 && mcp_id <= 0x16F && mcp_len >= 8)
+        if (balancingActive && mcp_id >= 0x160 && mcp_id <= 0x16F && mcp_len >= 8)
         {
           int moduleIndex = mcp_id & 0x0F;
           if (moduleIndex >= 0 && moduleIndex < MAX_MODULES)
