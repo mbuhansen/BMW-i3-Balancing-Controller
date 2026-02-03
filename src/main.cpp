@@ -720,8 +720,7 @@ void readCANMessages()
       {
         lastMcpDebug = millis();
         char debugBuf[128];
-        float ts = millis() / 1000.0f;
-        int offset = snprintf(debugBuf, sizeof(debugBuf), "[%08.3f] [MCP2515 RX] 0x%03X [%d] ", ts, mcp_id, mcp_len);
+        int offset = snprintf(debugBuf, sizeof(debugBuf), "[MCP2515 RX] 0x%03X [%d] ", mcp_id, mcp_len);
         for (int i = 0; i < mcp_len; i++)
         {
           offset += snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%02X ", mcp_data[i]);
@@ -876,8 +875,7 @@ void readCANMessages()
         if (canDebugTwaiEnabled)
         {
           char debugBuf[128];
-          float ts = millis() / 1000.0f;
-          int offset = snprintf(debugBuf, sizeof(debugBuf), "[%08.3f] [TWAI    TX] 0x%03X [%d] ", ts, forward_msg.identifier, forward_msg.data_length_code);
+          int offset = snprintf(debugBuf, sizeof(debugBuf), "[TWAI    TX] 0x%03X [%d] ", forward_msg.identifier, forward_msg.data_length_code);
           for (int i = 0; i < forward_msg.data_length_code; i++)
           {
             offset += snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%02X ", forward_msg.data[i]);
@@ -907,8 +905,7 @@ void readCANMessages()
       {
         lastTwaiDebug = millis();
         char debugBuf[128];
-        float ts = millis() / 1000.0f;
-        int offset = snprintf(debugBuf, sizeof(debugBuf), "[%08.3f] [TWAI    RX] 0x%03X [%d] ", ts, id, twai_msg.data_length_code);
+        int offset = snprintf(debugBuf, sizeof(debugBuf), "[TWAI    RX] 0x%03X [%d] ", id, twai_msg.data_length_code);
         for (int i = 0; i < twai_msg.data_length_code; i++)
         {
           offset += snprintf(debugBuf + offset, sizeof(debugBuf) - offset, "%02X ", twai_msg.data[i]);
