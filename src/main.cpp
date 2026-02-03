@@ -88,10 +88,10 @@ struct BMWModule
 // Global variables
 BMWModule modules[MAX_MODULES];
 bool balancingActive = false;
-bool manualMode = true;              // Start in MANUAL mode - gateway mode, no automatic balancing
-bool autoModeAtStartup = false;      // Setting: Start in Auto mode?
-bool gatewayMode = true;             // GATEWAY: Forward messages between BMS and slave modules
-bool mqttEnabled = false;            // Setting: Enable/Disable MQTT
+bool manualMode = true;         // Start in MANUAL mode - gateway mode, no automatic balancing
+bool autoModeAtStartup = false; // Setting: Start in Auto mode?
+bool gatewayMode = true;        // GATEWAY: Forward messages between BMS and slave modules
+bool mqttEnabled = false;       // Setting: Enable/Disable MQTT
 bool externalMasterDetected = false;
 bool canDebugTwaiEnabled = false;    // TWAI (BMS) debug logging - DISABLED by default
 bool canDebugMcp2515Enabled = false; // MCP2515 (slave modules) debug logging - DISABLED by default
@@ -402,7 +402,10 @@ void processMQTT()
 
       doc["voltage_lowest"] = serialized(String(lowest, 3));
       doc["voltage_highest"] = serialized(String(highest, 3));
-      doc["voltage_diff_mv"] = serialized(String((highest - lowest) * 1000.0f, 0));
+
+      // If no valid cell data, send 0 for diff instead of -5000
+      float diff_mv = (lowest < 5.0f) ? (highest - lowest) * 1000.0f : 0.0f;
+      doc["voltage_diff_mv"] = serialized(String(diff_mv, 0));
 
       // Module balancing status
       doc["module_1_balancing"] = modules[0].balancing;
@@ -771,13 +774,13 @@ void readCANMessages()
           // Tjek om balancing er aktiv på denne modul (bit 7 sat i en af spændingsbytes)
           bool balancingFlagSet = (mcp_data[1] & 0x80) || (mcp_data[3] & 0x80) || (mcp_data[5] & 0x80);
 
-          // Hvis vi balancerer OG modulet har balance-flag sat, så ignorer de rå mcp_data 
+          // Hvis vi balancerer OG modulet har balance-flag sat, så ignorer de rå mcp_data
           // og byg pakken fra de stabile værdier vi har i 'modules' (dem som WebUI også bruger)
           if (balancingActive && !balancingPaused && balancingFlagSet)
           {
             // Kopier KUN byte 6 (counter) - checksum beregnes bagefter
             forward_msg.data[6] = mcp_data[6];
-            
+
             // Overskriv cellespændingerne (byte 0-5) med stabile værdier
             for (int i = 0; i < 3; i++)
             {
@@ -1133,7 +1136,7 @@ void updateBalancing()
   {
     // Start balancing
     balancingActive = true;
-    balancingCycleTimer = millis();       // Start duty cycle timer
+    balancingCycleTimer = millis(); // Start duty cycle timer
     telnetPrintf("Starting balancing: Lowest=%.3fV, Highest=%.3fV, Diff=%.1fmV\n",
                  lowestVoltage, highestVoltage, difference_mV);
   }
@@ -1332,7 +1335,7 @@ void performBroadcast()
   if (hasError && (millis() > 5000))
   {
     status = "ERROR";
-    lowestVoltage = 0.0f;  // Set to 0 when in error state
+    lowestVoltage = 0.0f; // Set to 0 when in error state
   }
   else if (balancingActive)
   {
@@ -2785,7 +2788,7 @@ void loop()
 
     float lowestV = 0.0f;
     float highestV = 0.0f;
-    
+
     if (hasModules)
     {
       lowestV = getLowestCellVoltage();
