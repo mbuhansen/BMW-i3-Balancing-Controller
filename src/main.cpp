@@ -2375,19 +2375,44 @@ const char index_html[] PROGMEM = R"rawliteral(
             const minVoltage = Math.min(...allVoltages);
             const maxVoltage = Math.max(...allVoltages);
             const voltageRange = maxVoltage - minVoltage;
+
+            // Use a minimum window around the average so small differences are visible
+            const avgVoltage = allVoltages.reduce((sum, v) => sum + v, 0) / allVoltages.length;
+            const minWindow = 0.05; // 50mV minimum range for better visibility
+            let windowRange = Math.max(voltageRange, minWindow);
+            let scaleMin = avgVoltage - (windowRange / 2);
+            let scaleMax = avgVoltage + (windowRange / 2);
+
+            // Clamp scaling to a sane battery voltage range
+            const clampMin = 3.5;
+            const clampMax = 4.2;
+            if (scaleMin < clampMin) {
+              scaleMax += (clampMin - scaleMin);
+              scaleMin = clampMin;
+            }
+            if (scaleMax > clampMax) {
+              scaleMin -= (scaleMax - clampMax);
+              scaleMax = clampMax;
+            }
+            const scaleRange = Math.max(0.001, scaleMax - scaleMin);
+
+            // Pixel mapping similar to emulator
+            const minBarPx = 20;
+            const maxBarPx = 200;
+            const scaleMinMv = scaleMin * 1000.0;
+            const scaleMaxMv = scaleMax * 1000.0;
+            const scaleRangeMv = Math.max(1.0, scaleMaxMv - scaleMinMv);
             
             // Create bars for each cell
             allCells.forEach(cell => {
                 const bar = document.createElement('div');
                 bar.className = 'cell-bar';
                 
-                // Calculate height relative to the VALID voltage range
-                // If the ignored cell is out of range, clamp it to 5% min height
-                let heightPercent = 50;
-                if (voltageRange > 0) {
-                  heightPercent = ((cell.voltage - minVoltage) / voltageRange) * 100;
-                }
-                bar.style.height = Math.max(5, Math.min(100, heightPercent)) + '%';
+                // Map mV to a fixed pixel range for better visual resolution
+                const mV = cell.voltage * 1000.0;
+                let heightPx = ((mV - scaleMinMv) / scaleRangeMv) * (maxBarPx - minBarPx) + minBarPx;
+                heightPx = Math.max(minBarPx, Math.min(maxBarPx, heightPx));
+                bar.style.height = `${heightPx}px`;
                 
                 // Highlight lowest and highest cells
                 if (cell.voltage <= minVoltage + 0.001) { // Fuzzy match for float
@@ -2422,7 +2447,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (data.totalVoltage > 0) {
                 totalVoltageStr = ' | Total: ' + data.totalVoltage.toFixed(2) + 'V';
             }
-            chartInfo.textContent = `Range: ${minVoltage.toFixed(3)}V - ${maxVoltage.toFixed(3)}V | Δ${(voltageRange * 1000).toFixed(1)}mV | Status: ${data.status} | Target: ${data.activeTargetVoltage.toFixed(3)}V` + totalVoltageStr;
+            chartInfo.textContent = `Range: ${minVoltage.toFixed(3)}V - ${maxVoltage.toFixed(3)}V | Δ${(voltageRange * 1000).toFixed(1)}mV | Scale: ${scaleMin.toFixed(3)}V-${scaleMax.toFixed(3)}V | Status: ${data.status} | Target: ${data.activeTargetVoltage.toFixed(3)}V` + totalVoltageStr;
         }
         
         function sendCommand(cmd) {
