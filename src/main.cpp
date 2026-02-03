@@ -2234,6 +2234,9 @@ const char index_html[] PROGMEM = R"rawliteral(
                     if (module.error & 0x2000) errors.push("OTP EPROM/Media Error");
                     if (module.error & 0x4000) errors.push("Group3 Regs Invalid");
                     if (module.error & 0x8000) errors.push("Address Not Reg");
+                    
+                    // Byte 3: Additional Faults (Shifted by 24 bits)
+                    if (module.error & 0x10000000) errors.push("Restart Battery");
 
                     let errorDesc = errors.length > 0 ? errors.join(", ") : 'Unknown Error';
                     errorDesc += ' (0x' + module.error.toString(16).toUpperCase() + ')';
