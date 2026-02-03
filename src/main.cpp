@@ -43,6 +43,7 @@
 float minBalanceVoltage = 3.99f;  // Minimum voltage to start balancing (V)
 float balanceThresholdMv = 10.0f; // Start balancing if cells differ by more than this (mV)
 float balanceHysteresisMv = 5.0f; // Stop balancing when within this (mV)
+float cellVoltageOffset = 0.002f; // Voltage offset added to target (V) - typically 2mV
 String controllerSuffix = "";     // Suffix for controller name (e.g. "1", "2")
 bool dutyCycleEnabled = true;     // Enable duty cycle (15m run / 5m pause)
 
@@ -938,12 +939,12 @@ void readCANMessages()
         send_data[3] = 0x50;
         send_data[4] = 0x08; // Enable balancing
 
-        // Set target voltage to lowest cell + 2mV
+        // Set target voltage to lowest cell + offset (configurable, default 2mV)
         // BMS gets wrong cell values during balancing, so we override the target
         float lowestCell = getLowestCellVoltage();
         if (lowestCell > 0.5f) // Valid cell voltage
         {
-          float targetV = lowestCell + 0.002f; // Add 2mV
+          float targetV = lowestCell + cellVoltageOffset; // Add configurable offset
           uint16_t targetMV = (uint16_t)(targetV * 1000.0f);
           uint16_t originalTargetMV = twai_msg.data[0] | (twai_msg.data[1] << 8);
           send_data[0] = targetMV & 0xFF;        // Low byte
@@ -1118,10 +1119,10 @@ void updateBalancing()
 
   float lowestVoltage = getLowestCellVoltage();
 
-  // Always update active target to lowest + 2mV (User Request)
+  // Always update active target to lowest + offset (User Request)
   if (lowestVoltage > 0.5f)
   {
-    activeTargetVoltage = lowestVoltage + 0.002f;
+    activeTargetVoltage = lowestVoltage + cellVoltageOffset;
   }
 
   float highestVoltage = getHighestCellVoltage();
@@ -1262,6 +1263,13 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
             Serial.printf("Duty Cycle set to %s\n", dutyCycleEnabled ? "YES" : "NO");
             changed = true;
           }
+          if (doc["cellVoltageOffset"].is<float>())
+          {
+            cellVoltageOffset = doc["cellVoltageOffset"];
+            preferences.putFloat("cellOffset", cellVoltageOffset);
+            Serial.printf("Cell Voltage Offset set to %.4fV (%.1fmV)\n", cellVoltageOffset, cellVoltageOffset * 1000.0f);
+            changed = true;
+          }
 
           if (changed)
           {
@@ -1376,6 +1384,7 @@ void performBroadcast()
   doc["minBalanceVoltage"] = minBalanceVoltage;
   doc["balanceThresholdMv"] = balanceThresholdMv;
   doc["balanceHysteresisMv"] = balanceHysteresisMv;
+  doc["cellVoltageOffset"] = cellVoltageOffset;
   doc["controllerSuffix"] = controllerSuffix;
   doc["autoModeAtStartup"] = autoModeAtStartup;
   doc["mqttEnabled"] = mqttEnabled;
@@ -2014,6 +2023,13 @@ const char index_html[] PROGMEM = R"rawliteral(
                         </div>
                     </div>
                     <div class="setting-item">
+                        <div class="setting-label">Cell Voltage Offset</div>
+                        <div class="setting-input-group">
+                            <input type="number" id="cellVoltageOffset" step="0.001" min="0.002" max="0.010" value="0.002">
+                            <span>V</span>
+                        </div>
+                    </div>
+                    <div class="setting-item">
                         <div class="setting-label">Controller Name Suffix</div>
                         <div class="setting-input-group">
                             <input type="text" id="controllerSuffix" placeholder="e.g. 1" maxlength="5">
@@ -2098,6 +2114,9 @@ const char index_html[] PROGMEM = R"rawliteral(
             }
             if (document.activeElement.id !== 'balanceHysteresis' && data.balanceHysteresisMv) {
                 document.getElementById('balanceHysteresis').value = data.balanceHysteresisMv.toFixed(0);
+            }
+            if (document.activeElement.id !== 'cellVoltageOffset' && data.cellVoltageOffset) {
+                document.getElementById('cellVoltageOffset').value = data.cellVoltageOffset.toFixed(4);
             }
             if (data.controllerSuffix !== undefined) {
                 if (document.activeElement.id !== 'controllerSuffix') {
@@ -2418,6 +2437,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             const minBalanceVoltage = parseFloat(document.getElementById('minBalanceVoltage').value);
             const balanceThreshold = parseFloat(document.getElementById('balanceThreshold').value);
             const balanceHysteresis = parseFloat(document.getElementById('balanceHysteresis').value);
+            const cellVoltageOffset = parseFloat(document.getElementById('cellVoltageOffset').value);
             const controllerSuffix = document.getElementById('controllerSuffix').value;
             const autoModeAtStartup = document.getElementById('autoModeAtStartup').checked;
             const mqttEnabled = document.getElementById('mqttEnabled').checked;
@@ -2429,6 +2449,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                     minBalanceVoltage: minBalanceVoltage,
                     balanceThreshold: balanceThreshold,
                     balanceHysteresis: balanceHysteresis,
+                    cellVoltageOffset: cellVoltageOffset,
                     controllerSuffix: controllerSuffix,
                     autoModeAtStartup: autoModeAtStartup,
                     mqttEnabled: mqttEnabled,
@@ -2548,6 +2569,7 @@ void setup()
   minBalanceVoltage = preferences.getFloat("minVolts", 3.99f);
   balanceThresholdMv = preferences.getFloat("threshold", 10.0f);
   balanceHysteresisMv = preferences.getFloat("hysteresis", 5.0f);
+  cellVoltageOffset = preferences.getFloat("cellOffset", 0.002f);
   controllerSuffix = preferences.getString("suffix", "");
   autoModeAtStartup = preferences.getBool("autoStart", false);
   mqttEnabled = preferences.getBool("mqttEnabled", false);
@@ -2563,6 +2585,7 @@ void setup()
   Serial.printf("- Min Voltage: %.2fV\n", minBalanceVoltage);
   Serial.printf("- Threshold: %.0fmV\n", balanceThresholdMv);
   Serial.printf("- Hysteresis: %.0fmV\n", balanceHysteresisMv);
+  Serial.printf("- Cell Voltage Offset: %.4fV (%.1fmV)\n", cellVoltageOffset, cellVoltageOffset * 1000.0f);
   Serial.printf("- Suffix: '%s'\n", controllerSuffix.c_str());
   Serial.printf("- Auto Start: %s\n", autoModeAtStartup ? "YES" : "NO");
   Serial.printf("- MQTT Enabled: %s\n", mqttEnabled ? "YES" : "NO");
