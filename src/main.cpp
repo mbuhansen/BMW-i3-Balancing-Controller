@@ -2555,13 +2555,13 @@ const char index_html[] PROGMEM = R"rawliteral(
                 chartContainer.appendChild(bar);
             });
             
-            // Update chart info
+            // Update chart info - simplified to remove scale info
             const chartInfo = document.getElementById('chartInfo');
             let totalVoltageStr = '';
             if (data.totalVoltage > 0) {
                 totalVoltageStr = ' | Total: ' + data.totalVoltage.toFixed(2) + 'V';
             }
-            chartInfo.textContent = `Range: ${minVoltage.toFixed(3)}V - ${maxVoltage.toFixed(3)}V | Δ${(voltageRange * 1000).toFixed(1)}mV | Scale: ${scaleMin.toFixed(3)}V-${scaleMax.toFixed(3)}V | Status: ${data.status} | Target: ${data.activeTargetVoltage.toFixed(3)}V` + totalVoltageStr;
+            chartInfo.textContent = `Range: ${minVoltage.toFixed(3)}V - ${maxVoltage.toFixed(3)}V | Δ${(voltageRange * 1000).toFixed(1)}mV | Status: ${data.status} | Target: ${data.activeTargetVoltage.toFixed(3)}V` + totalVoltageStr;
         }
         
         function sendCommand(cmd) {
