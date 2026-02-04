@@ -46,7 +46,7 @@ float balanceHysteresisMv = 5.0f;   // Stop balancing when within this (mV)
 float cellVoltageOffset = 0.002f;   // Voltage offset added to target (V) - typically 2mV
 String controllerSuffix = "";       // Suffix for controller name (e.g. "1", "2")
 bool dutyCycleEnabled = true;       // Setting: Enable 15m Run / 5m Pause duty cycle (default ON)
-uint16_t dutyCycleOnMinutes = 6;    // Setting: Duty cycle ON time in minutes (4-9, default 6)
+uint16_t dutyCycleOnMinutes = 9;    // Setting: Duty cycle ON time in minutes (4-9, default 9)
 uint16_t dutyCyclePauseMinutes = 2; // Setting: Duty cycle PAUSE time in minutes (1-10, default 2)
 
 // BMW CRC8 finalxor values for COMMAND messages (0x080-0x08F)
