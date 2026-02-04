@@ -2490,12 +2490,21 @@ const char index_html[] PROGMEM = R"rawliteral(
             const maxVoltage = Math.max(...allVoltages);
             const voltageRange = maxVoltage - minVoltage;
 
-            // Use a minimum window around the average so small differences are visible
-            const avgVoltage = allVoltages.reduce((sum, v) => sum + v, 0) / allVoltages.length;
-            const minWindow = 0.05; // 50mV minimum range for better visibility
-            let windowRange = Math.max(voltageRange, minWindow);
-            let scaleMin = avgVoltage - (windowRange / 2);
-            let scaleMax = avgVoltage + (windowRange / 2);
+            // Dynamic window that adapts to actual voltage spread (up to 120mV+)
+            // Add fixed padding (10mV) above and below to ensure bars never overflow
+            const paddingMv = 0.010; // 10mV padding on each side
+            
+            let scaleMin = minVoltage - paddingMv;
+            let scaleMax = maxVoltage + paddingMv;
+            
+            // Ensure minimum window for visibility when cells are very close
+            const minWindow = 0.05; // 50mV minimum range
+            const currentWindow = scaleMax - scaleMin;
+            if (currentWindow < minWindow) {
+                const avgVoltage = (minVoltage + maxVoltage) / 2;
+                scaleMin = avgVoltage - (minWindow / 2);
+                scaleMax = avgVoltage + (minWindow / 2);
+            }
 
             // Clamp scaling to a sane battery voltage range
             const clampMin = 3.5;
