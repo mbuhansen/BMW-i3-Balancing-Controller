@@ -128,6 +128,7 @@ WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 unsigned long lastMqttPublish = 0;
 const unsigned long MQTT_PUBLISH_INTERVAL = 15000;
+unsigned long mqttConnectedAt = 0;
 
 // Telnet server for remote logging (Port 23)
 WiFiServer telnetServer(23);
@@ -364,6 +365,14 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
     payloadStr += (char)payload[i];
   }
 
+  // Ignore retained/stale commands right after reconnect
+  if (mqttConnectedAt > 0 && (millis() - mqttConnectedAt) < 2000)
+    return;
+
+  // Only accept explicit command payloads
+  if (payloadStr != "1")
+    return;
+
   telnetPrintf("MQTT received: %s = %s\n", topicStr.c_str(), payloadStr.c_str());
 
   String baseTopic = getBaseTopic();
@@ -427,6 +436,8 @@ void reconnectMQTT()
       mqttClient.subscribe((baseTopic + "/cmd/stop").c_str());
       mqttClient.subscribe((baseTopic + "/cmd/auto").c_str());
       
+      mqttConnectedAt = millis();
+
       String statusTopic = baseTopic + "/status";
       mqttClient.publish(statusTopic.c_str(), "online");
       sendHADiscovery();
