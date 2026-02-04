@@ -400,8 +400,13 @@ void processMQTT()
       float lowest = getLowestCellVoltage();
       float highest = getHighestCellVoltage();
 
-      doc["voltage_lowest"] = serialized(String(lowest, 3));
-      doc["voltage_highest"] = serialized(String(highest, 3));
+      char lowest_str[10];
+      char highest_str[10];
+      snprintf(lowest_str, sizeof(lowest_str), "%.3f", lowest);
+      snprintf(highest_str, sizeof(highest_str), "%.3f", highest);
+      
+      doc["voltage_lowest"] = serialized(lowest_str);
+      doc["voltage_highest"] = serialized(highest_str);
 
       // If no valid cell data, send 0 for diff instead of -5000
       float diff_mv = (lowest < 5.0f) ? (highest - lowest) * 1000.0f : 0.0f;
