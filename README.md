@@ -454,6 +454,13 @@ Module responses contain:
 - Monitor Serial output with CAN Debug enabled to see message flow
 - Verify BMS is sending requests on MCP2515 CAN bus
 
+### Battery contactor opens during debug mode
+- High Serial.println load in debug mode can cause timing issues
+- Battery contactor may open due to communication delays
+- **Solution**: Restart battery emulator to re-close contactor
+- **Prevention**: Reduce debug output or disable verbose logging during normal operation
+- This is a known limitation when using extensive serial debugging
+
 ## Serial Monitor Output
 
 View debugging info via USB serial connection:
