@@ -45,9 +45,9 @@ float balanceThresholdMv = 10.0f;   // Start balancing if cells differ by more t
 float balanceHysteresisMv = 5.0f;   // Stop balancing when within this (mV)
 float cellVoltageOffset = 0.002f;   // Voltage offset added to target (V) - typically 2mV
 String controllerSuffix = "";       // Suffix for controller name (e.g. "1", "2")
-bool dutyCycleEnabled = true;       // Enable duty cycle (custom on/pause)
-uint16_t dutyCycleOnMinutes = 6;    // Duty cycle ON minutes (4-9)
-uint16_t dutyCyclePauseMinutes = 2; // Duty cycle PAUSE minutes (1-10)
+bool dutyCycleEnabled = true;       // Setting: Enable 15m Run / 5m Pause duty cycle (default ON)
+uint16_t dutyCycleOnMinutes = 6;    // Setting: Duty cycle ON time in minutes (4-9, default 6)
+uint16_t dutyCyclePauseMinutes = 2; // Setting: Duty cycle PAUSE time in minutes (1-10, default 2)
 
 // BMW CRC8 finalxor values for COMMAND messages (0x080-0x08F)
 // Original values from SimpleBMS - used when modifying BMS commands
@@ -950,6 +950,9 @@ void readCANMessages()
         if (lowestCell > 0.5f) // Valid cell voltage
         {
           float targetV = lowestCell + cellVoltageOffset; // Add configurable offset
+          // Safety limit: never go below 3.7V (3700 mV)
+          if (targetV < 3.7f)
+            targetV = 3.7f;
           uint16_t targetMV = (uint16_t)(targetV * 1000.0f);
           uint16_t originalTargetMV = twai_msg.data[0] | (twai_msg.data[1] << 8);
           send_data[0] = targetMV & 0xFF;        // Low byte
@@ -1086,42 +1089,34 @@ void updateBalancing()
   if (manualMode)
     return;
 
-  // Duty Cycle Logic (custom on/pause) - only if enabled
-  if (dutyCycleEnabled)
+  // Duty Cycle Logic - Only if enabled
+  if (dutyCycleEnabled && balancingActive)
   {
     const unsigned long runMs = (unsigned long)dutyCycleOnMinutes * 60UL * 1000UL;
     const unsigned long pauseMs = (unsigned long)dutyCyclePauseMinutes * 60UL * 1000UL;
-    if (balancingActive)
+    if (!balancingPaused)
     {
-      if (!balancingPaused)
+      if (millis() - balancingCycleTimer > runMs)
       {
-        if (millis() - balancingCycleTimer > runMs)
-        {
-          balancingPaused = true;
-          balancingCycleTimer = millis();
-          telnetPrintf("Duty Cycle: Pausing (%um)\n", dutyCyclePauseMinutes);
-        }
-      }
-      else
-      {
-        if (millis() - balancingCycleTimer > pauseMs)
-        {
-          balancingPaused = false;
-          balancingCycleTimer = millis();
-          telnetPrintf("Duty Cycle: Resuming (%um)\n", dutyCycleOnMinutes);
-        }
+        balancingPaused = true;
+        balancingCycleTimer = millis();
+        telnetPrintf("Duty Cycle: Pausing (%um)\n", dutyCyclePauseMinutes);
       }
     }
     else
     {
-      balancingPaused = false;
-      balancingCycleTimer = millis();
+      if (millis() - balancingCycleTimer > pauseMs)
+      {
+        balancingPaused = false;
+        balancingCycleTimer = millis();
+        telnetPrintf("Duty Cycle: Resuming (%um)\n", dutyCycleOnMinutes);
+      }
     }
   }
   else
   {
-    // Duty cycle disabled - always run
     balancingPaused = false;
+    balancingCycleTimer = millis();
   }
 
   float lowestVoltage = getLowestCellVoltage();
@@ -1130,6 +1125,9 @@ void updateBalancing()
   if (lowestVoltage > 0.5f)
   {
     activeTargetVoltage = lowestVoltage + cellVoltageOffset;
+    // Safety limit: never go below 3.7V (3700 mV)
+    if (activeTargetVoltage < 3.7f)
+      activeTargetVoltage = 3.7f;
   }
 
   float highestVoltage = getHighestCellVoltage();
@@ -1267,31 +1265,31 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
           {
             dutyCycleEnabled = doc["dutyCycleEnabled"];
             preferences.putBool("dutyCycle", dutyCycleEnabled);
-            Serial.printf("Duty Cycle set to %s\n", dutyCycleEnabled ? "YES" : "NO");
+            Serial.printf("Duty Cycle Enabled set to %s\n", dutyCycleEnabled ? "YES" : "NO");
             changed = true;
           }
-          if (doc["dutyCycleOnMinutes"].is<int>())
+          if (doc["dutyCycleOnMinutes"].is<uint16_t>())
           {
-            uint16_t minutes = doc["dutyCycleOnMinutes"].as<uint16_t>();
-            if (minutes < 4)
-              minutes = 4;
-            if (minutes > 9)
-              minutes = 9;
-            dutyCycleOnMinutes = minutes;
+            uint16_t val = doc["dutyCycleOnMinutes"];
+            if (val < 4)
+              val = 4;
+            if (val > 9)
+              val = 9;
+            dutyCycleOnMinutes = val;
             preferences.putUInt("dutyOnMin", dutyCycleOnMinutes);
-            Serial.printf("Duty Cycle On set to %um\n", dutyCycleOnMinutes);
+            Serial.printf("Duty Cycle ON time set to %u minutes\n", dutyCycleOnMinutes);
             changed = true;
           }
-          if (doc["dutyCyclePauseMinutes"].is<int>())
+          if (doc["dutyCyclePauseMinutes"].is<uint16_t>())
           {
-            uint16_t minutes = doc["dutyCyclePauseMinutes"].as<uint16_t>();
-            if (minutes < 1)
-              minutes = 1;
-            if (minutes > 10)
-              minutes = 10;
-            dutyCyclePauseMinutes = minutes;
+            uint16_t val = doc["dutyCyclePauseMinutes"];
+            if (val < 1)
+              val = 1;
+            if (val > 10)
+              val = 10;
+            dutyCyclePauseMinutes = val;
             preferences.putUInt("dutyPauseMin", dutyCyclePauseMinutes);
-            Serial.printf("Duty Cycle Pause set to %um\n", dutyCyclePauseMinutes);
+            Serial.printf("Duty Cycle PAUSE time set to %u minutes\n", dutyCyclePauseMinutes);
             changed = true;
           }
           if (doc["cellVoltageOffset"].is<float>())
@@ -2092,23 +2090,21 @@ const char index_html[] PROGMEM = R"rawliteral(
                         <div class="setting-input-group">
                             <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
                                 <input type="checkbox" id="dutyCycleEnabled" style="width: 20px; height: 20px;">
-                          <span style="font-size: 0.9em; opacity: 0.8;">Enable Duty Cycle</span>
+                                <span style="font-size: 0.9em; opacity: 0.8;">Enable Duty Cycle</span>
                             </label>
                         </div>
                     </div>
                     <div class="setting-item">
-                      <div class="setting-label">Duty Cycle ON Time</div>
-                      <div class="setting-input-group">
-                        <input type="number" id="dutyCycleOnMinutes" step="1" min="4" max="9" value="6">
-                        <span>min</span>
-                      </div>
+                        <div class="setting-label">Duty Cycle ON Time (min)</div>
+                        <div class="setting-input-group">
+                            <input type="number" id="dutyCycleOnMinutes" min="4" max="9" step="1" value="6">
+                        </div>
                     </div>
                     <div class="setting-item">
-                      <div class="setting-label">Duty Cycle Pause Time</div>
-                      <div class="setting-input-group">
-                        <input type="number" id="dutyCyclePauseMinutes" step="1" min="1" max="10" value="5">
-                        <span>min</span>
-                      </div>
+                        <div class="setting-label">Duty Cycle PAUSE Time (min)</div>
+                        <div class="setting-input-group">
+                            <input type="number" id="dutyCyclePauseMinutes" min="1" max="10" step="1" value="5">
+                        </div>
                     </div>
                 </div>
 
@@ -2183,11 +2179,11 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (data.dutyCycleEnabled !== undefined) {
                  document.getElementById('dutyCycleEnabled').checked = data.dutyCycleEnabled;
             }
-            if (document.activeElement.id !== 'dutyCycleOnMinutes' && data.dutyCycleOnMinutes !== undefined) {
-              document.getElementById('dutyCycleOnMinutes').value = data.dutyCycleOnMinutes;
+            if (document.activeElement.id !== 'dutyCycleOnMinutes' && data.dutyCycleOnMinutes) {
+                document.getElementById('dutyCycleOnMinutes').value = data.dutyCycleOnMinutes;
             }
-            if (document.activeElement.id !== 'dutyCyclePauseMinutes' && data.dutyCyclePauseMinutes !== undefined) {
-              document.getElementById('dutyCyclePauseMinutes').value = data.dutyCyclePauseMinutes;
+            if (document.activeElement.id !== 'dutyCyclePauseMinutes' && data.dutyCyclePauseMinutes) {
+                document.getElementById('dutyCyclePauseMinutes').value = data.dutyCyclePauseMinutes;
             }
             
             // Update LED indicator
@@ -2524,8 +2520,8 @@ const char index_html[] PROGMEM = R"rawliteral(
             const autoModeAtStartup = document.getElementById('autoModeAtStartup').checked;
             const mqttEnabled = document.getElementById('mqttEnabled').checked;
             const dutyCycleEnabled = document.getElementById('dutyCycleEnabled').checked;
-          const dutyCycleOnMinutes = parseInt(document.getElementById('dutyCycleOnMinutes').value, 10);
-          const dutyCyclePauseMinutes = parseInt(document.getElementById('dutyCyclePauseMinutes').value, 10);
+            const dutyCycleOnMinutes = parseInt(document.getElementById('dutyCycleOnMinutes').value);
+            const dutyCyclePauseMinutes = parseInt(document.getElementById('dutyCyclePauseMinutes').value);
             
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
@@ -2653,18 +2649,8 @@ void setup()
   autoModeAtStartup = preferences.getBool("autoStart", false);
   mqttEnabled = preferences.getBool("mqttEnabled", false);
   dutyCycleEnabled = preferences.getBool("dutyCycle", true);
-  dutyCycleOnMinutes = (uint16_t)preferences.getUInt("dutyOnMin", 6);
-  dutyCyclePauseMinutes = (uint16_t)preferences.getUInt("dutyPauseMin", 5);
-
-  // Clamp duty cycle minutes to allowed ranges
-  if (dutyCycleOnMinutes < 4)
-    dutyCycleOnMinutes = 4;
-  if (dutyCycleOnMinutes > 9)
-    dutyCycleOnMinutes = 9;
-  if (dutyCyclePauseMinutes < 1)
-    dutyCyclePauseMinutes = 1;
-  if (dutyCyclePauseMinutes > 10)
-    dutyCyclePauseMinutes = 10;
+  dutyCycleOnMinutes = preferences.getUInt("dutyOnMin", 6);
+  dutyCyclePauseMinutes = preferences.getUInt("dutyPauseMin", 5);
 
   // Apply auto mode at startup if enabled
   if (autoModeAtStartup)
@@ -2681,8 +2667,8 @@ void setup()
   Serial.printf("- Auto Start: %s\n", autoModeAtStartup ? "YES" : "NO");
   Serial.printf("- MQTT Enabled: %s\n", mqttEnabled ? "YES" : "NO");
   Serial.printf("- Duty Cycle: %s\n", dutyCycleEnabled ? "YES" : "NO");
-  Serial.printf("- Duty Cycle On: %um\n", dutyCycleOnMinutes);
-  Serial.printf("- Duty Cycle Pause: %um\n", dutyCyclePauseMinutes);
+  Serial.printf("- Duty Cycle ON Time: %u minutes\n", dutyCycleOnMinutes);
+  Serial.printf("- Duty Cycle PAUSE Time: %u minutes\n", dutyCyclePauseMinutes);
 
   Serial.println("\n\n=================================");
   Serial.println("BMW i3 Balancing Controller");
