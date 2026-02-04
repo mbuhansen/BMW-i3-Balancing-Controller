@@ -10,10 +10,12 @@ Gateway balancing controller for BMW i3 battery modules - forwards messages betw
 - ✅ Smart balancing with configurable voltage thresholds
 - ✅ Automatic balancing based on cell voltage differences
 - ✅ Manual balancing control via web interface
+- ✅ **MQTT integration** with Home Assistant Discovery
+- ✅ **Control via Home Assistant**: Start/Stop/Auto buttons via MQTT
+- ✅ **Duty Cycle**: Configurable balancing pause/resume timing (4-9 min run, 1-10 min pause)
 - ✅ WiFi connectivity - connects to your router
 - ✅ WebSocket live data streaming
 - ✅ Proper BMW CRC8 checksum calculation
-- ✅ Dual-core operation: Gateway on Core 0, Web UI on Core 1
 
 ## Hardware Requirements
 
@@ -26,7 +28,7 @@ This board has the necessary dual CAN interface to handle gateway operations bet
 ### Additional Requirements
 
 - **BMW i3 Battery** with slave modules (8 modules, 12 cells each = 96 cells total)
-- **CAN connection** to PT-CAN2 bus (500 kbps)
+- **CAN connection** to PT-CAN bus (500 kbps)
 
 ## CAN Bus Arkitektur
 
@@ -60,6 +62,10 @@ MCP2515 CAN (CAN A) → Ekstern BMS
   GPIO 13 (MISO)
 ```
 
+**Power Supply (CRITICAL)**:
+- LilyGO must be powered by **12V from klemme 30C** (same power supply as battery)
+- Use same ground connection as battery
+
 **Note**: 
 - MCP2515 er påkrævet for gateway funktionalitet (forbindelse til BMS)
 - TWAI forbindes direkte til BMW i3 slave moduler
@@ -72,14 +78,22 @@ MCP2515 CAN (CAN A) → Ekstern BMS
 
 Install [PlatformIO IDE](https://platformio.org/install/ide?install=vscode) for VS Code.
 
-### 2. Configure WiFi
+### 2. Configure WiFi and MQTT
 
-Edit `src/main.cpp` and change WiFi credentials:
+Create `src/credentials.h` from `src/credentials.h.example`:
 
 ```cpp
-const char* WIFI_SSID = "YourWiFiName";
-const char* WIFI_PASSWORD = "YourWiFiPassword";
+// WiFi Settings
+#define WIFI_SSID "YourWiFiName"
+#define WIFI_PASSWORD "YourWiFiPassword"
+
+// MQTT Settings (leave empty for disabled/anonymous)
+#define MQTT_BROKER "192.168.1.100"
+#define MQTT_USER "your_username"
+#define MQTT_PASSWORD "your_password"
 ```
+
+Or use the provided template as starting point.
 
 ### 3. Upload Firmware
 
@@ -97,6 +111,30 @@ pio run --target upload --environment lilygo_t2can
 ### 5. Access Web Interface
 
 Open browser and navigate to the IP address shown in Serial Monitor.
+
+## Startup Sequence (IMPORTANT)
+
+The correct power-up sequence is critical to avoid slave module errors:
+
+1. **Power battery to klemme 30C** (battery remains in standby/sleep mode)
+2. **Wait for LilyGO to fully boot**
+   - System will show error state initially (this is normal)
+3. **Enable battery emulator** (or wake up battery from standby)
+   - This starts module communication (system status will show "system OK")
+   - Battery begins sending on CAN bus
+   - Controller now receives slave module responses
+   - Error state clears and system becomes operational
+
+**If you encounter slave module errors:**
+- Temporarily connect **both CAN bus lines** to MCP2515 (both TWAI and MCP2515 connected)
+- Wait for errors to clear 
+- Then move BMS CAN bus back to TWAI CAN B
+- System will now operate normally
+
+**Why this matters:**
+- LilyGO must be fully initialized before battery communication starts
+- Otherwise slave modules may not respond correctly
+- Recovery sequence allows proper synchronization
 
 ## How It Works
 
@@ -157,6 +195,11 @@ In Auto mode, the controller:
    - Sends own commands with balance target + voltage requests
    - Stops when cells are within 5mV of each other
 5. Returns to gateway mode when balancing complete
+6. **Duty Cycle** (if enabled):
+   - Runs balancing for configurable period (default 9 minutes)
+   - Pauses for configurable period (default 2 minutes)
+   - Allows battery to cool down between balancing cycles
+   - When disabled: Slave modules run their own built-in duty cycle (9 min on, 1 min off)
 
 ### Manual Mode
 
@@ -167,22 +210,99 @@ In Auto mode, the controller:
 
 ## Configuration
 
-Edit `src/main.cpp` to customize:
+### WiFi and MQTT Setup
+
+All credentials are configured in `src/credentials.h`:
+
+1. **Create credentials.h** from the example file:
+   ```bash
+   cp src/credentials.h.example src/credentials.h
+   ```
+
+2. **Edit credentials.h** with your settings:
+   ```cpp
+   // WiFi Settings
+   #define WIFI_SSID "YourWiFiName"
+   #define WIFI_PASSWORD "YourWiFiPassword"
+
+   // MQTT Settings (leave empty for disabled or anonymous broker)
+   #define MQTT_BROKER "192.168.1.xxx"
+   #define MQTT_USER "your_username"      // Leave empty for anonymous
+   #define MQTT_PASSWORD "your_password"
+   ```
+
+3. **Enable MQTT in web interface** after first boot
+
+### Other Configuration
+
+Balancing parameters can be changed via the **Settings** menu in the web interface:
 
 ```cpp
-// WiFi Settings
-const char* WIFI_SSID = "YourWiFiName";
-const char* WIFI_PASSWORD = "YourWiFiPassword";
+// Balancing Parameters (adjustable from web interface Settings)
+MIN_BALANCE_VOLTAGE 3.99    // Minimum voltage to start balancing (V)
+BALANCE_THRESHOLD_MV 10     // Start balancing if cells differ by more than this (mV)
+BALANCE_HYSTERESIS_MV 5     // Stop balancing when within this (mV)
+CELL_VOLTAGE_OFFSET 0.002   // Voltage offset added to target (V)
 
-// Balancing Parameters
-#define BALANCE_THRESHOLD_MV 10    // Start balancing threshold
-#define BALANCE_HYSTERESIS_MV 5    // Stop balancing threshold
-#define CAN_COMMAND_INTERVAL_MS 50 // Command send rate
-
-// Hardware Configuration
-#define MAX_MODULES 8              // Number of battery modules
-#define CELLS_PER_MODULE 12        // Cells per module (96 total)
+// Duty Cycle (adjustable from web interface Settings)
+DUTY_CYCLE_ENABLED true     // Enable duty cycle (default: ON)
+DUTY_CYCLE_ON_MIN 9         // Run time in minutes (4-9)
+DUTY_CYCLE_PAUSE_MIN 2      // Pause time in minutes (1-10)
 ```
+
+**Note**: These settings are saved to flash memory and persist after reboot.
+
+## Home Assistant Integration
+
+### Automatic Discovery
+
+When MQTT is enabled and connected, the controller automatically publishes Home Assistant Discovery payloads.
+
+### Available Sensors
+
+Published MQTT metrics (topic: `homeassistant/home/bmw-i3-bms/metrics`):
+- `voltage_lowest` - Lowest cell voltage (3 decimals)
+- `voltage_highest` - Highest cell voltage (3 decimals)
+- `voltage_diff_mv` - Cell voltage difference in mV
+- `status` - Controller status (IDLE/BALANCING/BALANCING_PAUSED/ERROR)
+- `auto_mode` - Operating mode (Auto/Manual)
+- `system_status` - System health (System OK/Error)
+- `module_1_balancing` through `module_8_balancing` - Per-module balancing status
+
+### Control Buttons
+
+Three buttons available for Home Assistant automation:
+- **Start Balancing** - Force immediate balancing start
+- **Stop / Gateway Mode** - Stop balancing and return to gateway mode
+- **Auto Mode** - Enable automatic balancing
+
+Usage in Home Assistant:
+```yaml
+# Example automation
+automation:
+  - alias: "Start BMW Balancing"
+    trigger:
+      platform: time
+      at: "22:00:00"
+    action:
+      service: mqtt.publish
+      data:
+        topic: "homeassistant/home/bmw-i3-bms/cmd/start"
+        payload: "1"
+```
+
+## MQTT Topics
+
+Base topic: `homeassistant/home/bmw-i3-bms` (or with suffix if configured)
+
+**Publish (from controller):**
+- `.../metrics` - All telemetry data (JSON)
+- `.../status` - Connection status (online/offline)
+
+**Subscribe (from Home Assistant):**
+- `.../cmd/start` - Start balancing
+- `.../cmd/stop` - Stop balancing
+- `.../cmd/auto` - Auto mode
 
 ## CAN Protocol Details
 
@@ -228,6 +348,20 @@ Module responses contain:
 - Try Manual mode to force balancing
 - Verify modules are responding (check Serial Monitor)
 - Check module error codes in web interface
+- If duty cycle is enabled, check if currently in pause phase
+
+### MQTT not connecting
+- Verify broker address and credentials in `credentials.h`
+- Check WiFi connection is successful (IP shown on Serial Monitor)
+- Enable MQTT in web interface settings
+- Verify MQTT broker is accessible from network
+- Check Serial Monitor for MQTT connection logs
+
+### Home Assistant buttons not appearing
+- Ensure MQTT is enabled and connected (check web interface)
+- Check Home Assistant MQTT integration is configured
+- Wait for Home Assistant to receive discovery payloads (30-60 seconds)
+- Manually trigger discovery in Home Assistant if needed
 
 ### Web interface not loading
 - Verify WiFi connection in Serial Monitor
