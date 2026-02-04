@@ -310,9 +310,84 @@ void sendHADiscovery()
   }
 
   telnetPrintln("MQTT: Sent Home Assistant Discovery payloads");
+
+  // Publish button discovery for commands
+  struct ButtonConfig
+  {
+    const char *id;
+    const char *name;
+    const char *topic;
+  };
+
+  ButtonConfig buttons[] = {
+      {"start_bal", "Start Balancing", "cmd/start"},
+      {"stop_bal", "Stop / Gateway Mode", "cmd/stop"},
+      {"auto_mode", "Auto Mode", "cmd/auto"}};
+
+  for (const auto &b : buttons)
+  {
+    JsonDocument doc;
+    doc["name"] = b.name;
+    doc["cmd_t"] = baseTopic + "/" + b.topic;
+    doc["cmd_tpl"] = "1"; // Send payload "1" when pressed
+    doc["uniq_id"] = nodeId + "_btn_" + b.id;
+    doc["icon"] = "mdi:play";
+
+    JsonObject dev = doc["dev"].to<JsonObject>();
+    dev["ids"] = nodeId;
+    dev["name"] = deviceName;
+    dev["mf"] = "BMW/LilyGO";
+    dev["mdl"] = "T-2CAN";
+    dev["sw"] = "1.2";
+
+    String topic = "homeassistant/button/" + nodeId + "/" + b.id + "/config";
+    char buffer[512];
+    size_t n = serializeJson(doc, buffer);
+    if (!mqttClient.publish(topic.c_str(), buffer, true))
+    {
+      telnetPrintf("MQTT: Failed to publish button discovery for %s (len=%d)\n", b.id, n);
+    }
+    delay(10); // Slack for network
+  }
+
+  telnetPrintln("MQTT: Sent Home Assistant Button Discovery");
 }
 
 // MQTT Functions
+// MQTT Callback - Handle incoming commands from Home Assistant
+void mqttCallback(char* topic, byte* payload, unsigned int length)
+{
+  String topicStr = String(topic);
+  String payloadStr = "";
+  for (unsigned int i = 0; i < length; i++)
+  {
+    payloadStr += (char)payload[i];
+  }
+
+  telnetPrintf("MQTT received: %s = %s\n", topicStr.c_str(), payloadStr.c_str());
+
+  String baseTopic = getBaseTopic();
+
+  // Handle command topics
+  if (topicStr == baseTopic + "/cmd/start")
+  {
+    balancingActive = true;
+    manualMode = true;
+    telnetPrintln("MQTT: Start balancing");
+  }
+  else if (topicStr == baseTopic + "/cmd/stop")
+  {
+    balancingActive = false;
+    manualMode = true;
+    telnetPrintln("MQTT: Stop balancing - gateway mode");
+  }
+  else if (topicStr == baseTopic + "/cmd/auto")
+  {
+    manualMode = false;
+    telnetPrintln("MQTT: Auto mode enabled");
+  }
+}
+
 void reconnectMQTT()
 {
   if (!mqttEnabled)
@@ -342,7 +417,17 @@ void reconnectMQTT()
     if (connected)
     {
       telnetPrintln("MQTT Connected");
-      String statusTopic = getBaseTopic() + "/status";
+      
+      // Set callback for incoming messages
+      mqttClient.setCallback(mqttCallback);
+      
+      // Subscribe to command topics
+      String baseTopic = getBaseTopic();
+      mqttClient.subscribe((baseTopic + "/cmd/start").c_str());
+      mqttClient.subscribe((baseTopic + "/cmd/stop").c_str());
+      mqttClient.subscribe((baseTopic + "/cmd/auto").c_str());
+      
+      String statusTopic = baseTopic + "/status";
       mqttClient.publish(statusTopic.c_str(), "online");
       sendHADiscovery();
     }
