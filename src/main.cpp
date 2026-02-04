@@ -2016,8 +2016,6 @@ const char index_html[] PROGMEM = R"rawliteral(
         
         <div class="settings-section">
             <div class="settings-buttons">
-                <button id="debugBtnTwai" onclick="toggleDebugTwai()">🐛 TWAI Debug: OFF</button>
-                <button id="debugBtnMcp" onclick="toggleDebugMcp2515()">🐛 MCP2515 Debug: OFF</button>
                 <input type="file" id="otaFile" accept=".bin" onchange="uploadOTA()" style="display:none;">
                 <button class="ota" onclick="document.getElementById('otaFile').click()">⬆️ OTA Update</button>
                 <button class="restart" onclick="restartDevice()">🔄 Restart</button>
@@ -2028,6 +2026,9 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
             
             <div class="settings-content" id="settingsContent">
+                <div style="display: flex; justify-content: center; margin-bottom: 20px;">
+                    <button id="debugBtnCombined" onclick="toggleDebugCan()">🐛 CAN Debug: OFF</button>
+                </div>
                 <div class="settings-grid">
                     <div class="setting-item">
                         <div class="setting-label">Min Balance Voltage</div>
@@ -2554,21 +2555,14 @@ const char index_html[] PROGMEM = R"rawliteral(
             btn.classList.toggle('open');
         }
         
-        let canDebugTwaiEnabled = false;
-        let canDebugMcp2515Enabled = false;
+        let canDebugEnabled = false;
         
-        function toggleDebugTwai() {
-            canDebugTwaiEnabled = !canDebugTwaiEnabled;
+        function toggleDebugCan() {
+            canDebugEnabled = !canDebugEnabled;
             sendCommand('toggleDebugTwai');
-            const btn = document.getElementById('debugBtnTwai');
-            btn.textContent = canDebugTwaiEnabled ? '🐛 TWAI Debug: ON' : '🐛 TWAI Debug: OFF';
-        }
-        
-        function toggleDebugMcp2515() {
-            canDebugMcp2515Enabled = !canDebugMcp2515Enabled;
             sendCommand('toggleDebugMcp2515');
-            const btn = document.getElementById('debugBtnMcp');
-            btn.textContent = canDebugMcp2515Enabled ? '🐛 MCP2515 Debug: ON' : '🐛 MCP2515 Debug: OFF';
+            const btn = document.getElementById('debugBtnCombined');
+            btn.textContent = canDebugEnabled ? '🐛 CAN Debug: ON' : '🐛 CAN Debug: OFF';
         }
         
         function uploadOTA() {
