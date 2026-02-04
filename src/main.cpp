@@ -1483,7 +1483,6 @@ void performBroadcast()
   doc["highestVoltage"] = highestVoltage;
   doc["difference"] = (highestVoltage - lowestVoltage) * 1000.0f;
   doc["totalVoltage"] = totalBatteryVoltage;
-  doc["bmsTargetVoltage"] = bmsTargetVoltage;
   doc["activeTargetVoltage"] = activeTargetVoltage;
   doc["gatewayMode"] = gatewayMode;
   doc["externalMaster"] = externalMasterDetected && (millis() - lastExternalCommandTime < 60000);
@@ -2056,10 +2055,6 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div class="controls">
             <div style="display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap;">
                 <div style="text-align: center;">
-                    <div style="font-size: 0.9em; opacity: 0.8; margin-bottom: 5px;">BMS Target</div>
-                    <div id="bmsTarget" style="font-size: 1.5em; font-weight: bold; color: #60a5fa;">-.-V</div>
-                </div>
-                <div style="text-align: center;">
                     <div style="font-size: 0.9em; opacity: 0.8; margin-bottom: 5px;">Active Target</div>
                     <div id="activeTarget" style="font-size: 1.5em; font-weight: bold; color: #34d399;">-.-V</div>
                 </div>
@@ -2289,14 +2284,6 @@ const char index_html[] PROGMEM = R"rawliteral(
             const diff = data.difference;
             const diffElement = document.getElementById('difference');
             diffElement.textContent = diff.toFixed(1) + ' mV';
-            
-            // Update BMS target voltage
-            const bmsTargetElement = document.getElementById('bmsTarget');
-            if (data.bmsTargetVoltage > 0) {
-                bmsTargetElement.textContent = data.bmsTargetVoltage.toFixed(3) + 'V';
-            } else {
-                bmsTargetElement.textContent = '-.-V';
-            }
             
             // Update active target voltage (what we actually send to modules)
             const activeTargetElement = document.getElementById('activeTarget');
