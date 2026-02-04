@@ -43,7 +43,7 @@
 float minBalanceVoltage = 3.99f;    // Minimum voltage to start balancing (V)
 float balanceThresholdMv = 10.0f;   // Start balancing if cells differ by more than this (mV)
 float balanceHysteresisMv = 5.0f;   // Stop balancing when within this (mV)
-float cellVoltageOffset = 0.002f;   // Voltage offset added to target (V) - typically 2mV
+float cellVoltageOffset = 0.004f;   // Voltage offset added to target (V) - typically 4mV
 String controllerSuffix = "";       // Suffix for controller name (e.g. "1", "2")
 bool dutyCycleEnabled = true;       // Setting: Enable 15m Run / 5m Pause duty cycle (default ON)
 uint16_t dutyCycleOnMinutes = 9;    // Setting: Duty cycle ON time in minutes (4-9, default 9)
