@@ -66,6 +66,83 @@ MCP2515 CAN (CAN A) → Ekstern BMS
 - LilyGO must be powered by **12V from klemme 30C** (same power supply as battery)
 - Use same ground connection as battery
 
+### Wiring Diagram
+
+```
+                 12V (Klemme 30C) ──────────┐
+                 GND ───────────────────┐   │
+                                        │   │
+                                    ┌───┼───┼────────────────────────────┐
+                                    │   │   │  LilyGO T-2CAN (ESP32-S3)  │
+                                    │  GND 12V                           │
+                                    │  ┌──────────┐      ┌──────────┐    │
+                                    │  │  TWAI    │      │ MCP2515  │    │
+                                    │  │  (CAN B) │      │ (CAN A)  │    │
+                                    │  │  GPIO 7  │      │ GPIO 10  │    │
+                                    │  │  GPIO 6  │      │ GPIO 8   │    │
+                                    │  └────┬─────┘      └─────┬────┘    │
+                                    │       │                  │         │
+                                    │       │                  │         │
+                                    └───────┼──────────────────┼─────────┘
+                                            │                  │
+                                      ┌─────┴─────┐      ┌─────┴─────┐
+                                      │  CAN_H    │      │  CAN_H    │
+                                      │  CAN_L    │      │  CAN_L    │
+                                      │           │      │           │
+                                      └─────┬─────┘      └─────┬─────┘
+                                            │                  │
+    ┌──────────────┐                        │                  │
+    │  External    │  ◄─────────────────────┘                  │
+    │  BMS         │  (Direct connection)                      │
+    │  [120Ω term.]│                                           │
+    └──────┬───────┘                                           │
+           │                                                   │
+           │  CAN Loop (Only used for termination)             │
+           │  (CAN_H/CAN_L/)                                   │
+           │                                                   │
+           └──────────────────────────┐                        │
+                                      │                        │
+                               ┌──────▼───────────────┐        │
+                               │  Slave Module 1      │        │
+                               │  (0x080)             │        │
+                               │                      │        │
+                               └──────┬───────────────┘        │
+                                      │                        │
+                               ┌──────▼───────────────┐        │
+                               │  Slave Module 2      │        │
+                               │  (0x081)             │        │
+                               └──────┬───────────────┘        │
+                                      │                        │
+                                      :                        │
+                                      │                        │
+                               ┌──────▼───────────────┐        │
+                               │  Slave Module 8      │        │
+                               │  (0x087)             │◄───────┘
+                               └──────────────────────┘  (MCP2515 connection)
+
+
+Power Connections:
+  Battery Klemme 30C (12V) ──► LilyGO 12V input
+  Battery GND ──────────────► LilyGO GND
+```
+
+**Connection Details:**
+- **TWAI CAN B** (GPIO 7 TX, GPIO 6 RX) → External BMS
+  - Direct connection to BMS
+  - Used for monitoring and transparent gateway mode
+  - Lilygo has 120Ω termination resistor
+  
+- **MCP2515 CAN A** (Internal SPI connection) → Slave Module 8
+  - Connects to CAN loop at Slave Module 8
+  - CAN loop: BMS → Slave Module 1 → ... → Slave Module 8 → back to BMS
+  - BMS has built-in 120Ω termination resistor
+  - Lilygo has 120Ω termination resistor
+  - Forms complete CAN bus loop through all slave modules
+  
+- **Power**: 12V from klemme 30C + GND from battery
+  - Same power supply as battery pack
+  - Ensures proper ground reference for CAN communication
+
 **Note**: 
 - MCP2515 er påkrævet for gateway funktionalitet (forbindelse til BMS)
 - TWAI forbindes direkte til BMW i3 slave moduler
@@ -198,7 +275,7 @@ In Auto mode, the controller:
 6. **Duty Cycle** (if enabled):
    - Runs balancing for configurable period (default 9 minutes)
    - Pauses for configurable period (default 2 minutes)
-   - Allows battery to cool down between balancing cycles
+   - Allows battery to stabilize cell voltage reading more between balancing
    - When disabled: Slave modules run their own built-in duty cycle (9 min on, 1 min off)
 
 ### Manual Mode
