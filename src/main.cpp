@@ -106,12 +106,6 @@ uint32_t lastCommandTime = 0;
 uint32_t lastExternalCommandTime = 0;
 uint32_t lastDataUpdate = 0;
 
-// Filtered values for UI/MQTT (do not affect control logic)
-float filteredLowestVoltage = 0.0f;
-float filteredHighestVoltage = 0.0f;
-bool filteredVoltageInit = false;
-const float voltageFilterAlpha = 0.2f; // 0..1 (higher = more responsive)
-
 // Balancing duty cycle (customizable)
 bool balancingPaused = false;
 unsigned long balancingCycleTimer = 0;
@@ -124,7 +118,6 @@ unsigned long balancingCycleTimer = 0;
 // Forward declarations
 float getLowestCellVoltage();
 float getHighestCellVoltage();
-void updateFilteredVoltages(float rawLowest, float rawHighest, float &outLowest, float &outHighest, float &outDiffMv);
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
@@ -503,16 +496,11 @@ void processMQTT()
       float lowest = getLowestCellVoltage();
       float highest = getHighestCellVoltage();
 
-      float lowestFiltered = lowest;
-      float highestFiltered = highest;
-      float diffFilteredMv = 0.0f;
-      updateFilteredVoltages(lowest, highest, lowestFiltered, highestFiltered, diffFilteredMv);
-
-      doc["voltage_lowest"] = serialized(String(lowestFiltered, 3));
-      doc["voltage_highest"] = serialized(String(highestFiltered, 3));
+      doc["voltage_lowest"] = serialized(String(lowest, 3));
+      doc["voltage_highest"] = serialized(String(highest, 3));
 
       // If no valid cell data, send 0 for diff instead of -5000
-      float diff_mv = (lowestFiltered < 5.0f) ? diffFilteredMv : 0.0f;
+      float diff_mv = (lowest < 5.0f) ? (highest - lowest) * 1000.0f : 0.0f;
       doc["voltage_diff_mv"] = serialized(String(diff_mv, 0));
 
       // Module balancing status
@@ -1157,36 +1145,6 @@ float getHighestCellVoltage()
   return highest;
 }
 
-// Update filtered voltages for UI/MQTT (does not affect control logic)
-void updateFilteredVoltages(float rawLowest, float rawHighest, float &outLowest, float &outHighest, float &outDiffMv)
-{
-  const bool valid = (rawLowest > 0.5f && rawHighest > 0.5f);
-  if (!valid)
-  {
-    filteredVoltageInit = false;
-    outLowest = rawLowest;
-    outHighest = rawHighest;
-    outDiffMv = 0.0f;
-    return;
-  }
-
-  if (!filteredVoltageInit)
-  {
-    filteredLowestVoltage = rawLowest;
-    filteredHighestVoltage = rawHighest;
-    filteredVoltageInit = true;
-  }
-  else
-  {
-    filteredLowestVoltage = voltageFilterAlpha * rawLowest + (1.0f - voltageFilterAlpha) * filteredLowestVoltage;
-    filteredHighestVoltage = voltageFilterAlpha * rawHighest + (1.0f - voltageFilterAlpha) * filteredHighestVoltage;
-  }
-
-  outLowest = filteredLowestVoltage;
-  outHighest = filteredHighestVoltage;
-  outDiffMv = (filteredHighestVoltage - filteredLowestVoltage) * 1000.0f;
-}
-
 // Send balancing command AND voltage requests to slave modules via TWAI
 // When balancing: Replaces BMS requests with our own (balance + data request)
 // When not balancing: Does nothing (BMS requests are forwarded instead)
@@ -1532,14 +1490,9 @@ void performBroadcast()
 
   doc["status"] = status;
   doc["mode"] = mode;
-  float lowestFiltered = lowestVoltage;
-  float highestFiltered = highestVoltage;
-  float diffFilteredMv = 0.0f;
-  updateFilteredVoltages(lowestVoltage, highestVoltage, lowestFiltered, highestFiltered, diffFilteredMv);
-
-  doc["lowestVoltage"] = lowestFiltered;
-  doc["highestVoltage"] = highestFiltered;
-  doc["difference"] = diffFilteredMv;
+  doc["lowestVoltage"] = lowestVoltage;
+  doc["highestVoltage"] = highestVoltage;
+  doc["difference"] = (highestVoltage - lowestVoltage) * 1000.0f;
   doc["totalVoltage"] = totalBatteryVoltage;
   doc["activeTargetVoltage"] = activeTargetVoltage;
   doc["gatewayMode"] = gatewayMode;
