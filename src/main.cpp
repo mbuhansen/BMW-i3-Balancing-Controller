@@ -2774,8 +2774,14 @@ const char index_html[] PROGMEM = R"rawliteral(
             }
             let mqttInfoStr = '';
             const mqttFresh = data.mqttBatteryInfoAgeMs !== undefined && data.mqttBatteryInfoAgeMs > 0 && data.mqttBatteryInfoAgeMs < 20000;
-            if (data.mqttBatteryCurrent !== undefined) {
-              mqttInfoStr = ' | Current: ' + data.mqttBatteryCurrent.toFixed(1) + 'A';
+            if (data.mqttBatteryCurrent !== undefined && data.totalVoltage > 0) {
+              const powerW = data.totalVoltage * data.mqttBatteryCurrent;
+              if (Math.abs(powerW) < 1000.0) {
+                mqttInfoStr = ' | Power: ' + powerW.toFixed(0) + 'W';
+              } else {
+                const powerKw = powerW / 1000.0;
+                mqttInfoStr = ' | Power: ' + powerKw.toFixed(2) + 'kW';
+              }
               if (data.mqttBatterySoc !== undefined && data.mqttBatterySoc >= 0) {
                 mqttInfoStr += ' | SOC: ' + data.mqttBatterySoc.toFixed(1) + '%';
               }
