@@ -2523,11 +2523,14 @@ const char index_html[] PROGMEM = R"rawliteral(
             
             if (allCells.length === 0) return;
             
-            // Calculate voltage range for all cells
+            // Calculate stats for scaling (use all cells for voltage range)
             const allVoltages = allCells.map(c => c.voltage);
             const minVoltage = Math.min(...allVoltages);
             const maxVoltage = Math.max(...allVoltages);
             const voltageRange = maxVoltage - minVoltage;
+            
+            // For finding lowest/highest cell, use all cells
+            const cellsForStats = allCells;
 
             // Dynamic window that adapts to actual voltage spread (up to 120mV+)
             // Add fixed padding (10mV) above and below to ensure bars never overflow
