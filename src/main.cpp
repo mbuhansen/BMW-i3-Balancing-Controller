@@ -388,7 +388,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
 
   if (topicStr == "BE/info")
   {
-    StaticJsonDocument<96> filter;
+    JsonDocument filter;
     filter["battery_current_2"] = true;
     filter["SOC_2"] = true;
 
@@ -409,6 +409,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
       }
       if (updated)
         mqttBatteryInfoAt = millis();
+    }
+    else
+    {
+      telnetPrintf("MQTT: BE/info parse error: %s\n", error.c_str());
     }
     return;
   }
@@ -1323,6 +1327,9 @@ void updateBalancing()
 
   // Don't do auto-balancing in manual mode
   if (manualMode)
+    return;
+
+  if (dischargeBlockActive)
     return;
 
   // Duty Cycle Logic - Only if enabled
@@ -2767,10 +2774,13 @@ const char index_html[] PROGMEM = R"rawliteral(
             }
             let mqttInfoStr = '';
             const mqttFresh = data.mqttBatteryInfoAgeMs !== undefined && data.mqttBatteryInfoAgeMs > 0 && data.mqttBatteryInfoAgeMs < 20000;
-            if (mqttFresh && data.mqttBatteryCurrent !== undefined) {
+            if (data.mqttBatteryCurrent !== undefined) {
               mqttInfoStr = ' | Current: ' + data.mqttBatteryCurrent.toFixed(1) + 'A';
               if (data.mqttBatterySoc !== undefined && data.mqttBatterySoc >= 0) {
                 mqttInfoStr += ' | SOC: ' + data.mqttBatterySoc.toFixed(1) + '%';
+              }
+              if (!mqttFresh) {
+                mqttInfoStr += ' (stale)';
               }
             }
             chartInfo.textContent = `Range: ${minVoltage.toFixed(3)}V - ${maxVoltage.toFixed(3)}V | Δ${(voltageRange * 1000).toFixed(1)}mV | Status: ${data.status} | Target: ${data.activeTargetVoltage.toFixed(3)}V` + totalVoltageStr + mqttInfoStr;
@@ -3015,6 +3025,7 @@ void setup()
 
     // Configure MQTT Server
     mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+    mqttClient.setBufferSize(2048);
 
     IPAddress IP = WiFi.localIP();
     Serial.print("IP address: ");
