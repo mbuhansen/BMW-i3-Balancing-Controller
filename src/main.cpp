@@ -389,22 +389,25 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
   if (topicStr == "BE/info")
   {
     JsonDocument filter;
-    filter["battery_current"] = true;
-    filter["SOC"] = true;
+    const bool usePrimary = (controllerSuffix.length() == 0 || controllerSuffix == "1");
+    const char *currentKey = usePrimary ? "battery_current" : "battery_current_2";
+    const char *socKey = usePrimary ? "SOC" : "SOC_2";
+    filter[currentKey] = true;
+    filter[socKey] = true;
 
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, payloadStr, DeserializationOption::Filter(filter));
     if (!error)
     {
       bool updated = false;
-      if (doc["battery_current"].is<float>() || doc["battery_current"].is<double>() || doc["battery_current"].is<int>())
+      if (doc[currentKey].is<float>() || doc[currentKey].is<double>() || doc[currentKey].is<int>())
       {
-        mqttBatteryCurrent = doc["battery_current"].as<float>();
+        mqttBatteryCurrent = doc[currentKey].as<float>();
         updated = true;
       }
-      if (doc["SOC"].is<float>() || doc["SOC"].is<double>() || doc["SOC"].is<int>())
+      if (doc[socKey].is<float>() || doc[socKey].is<double>() || doc[socKey].is<int>())
       {
-        mqttBatterySoc = doc["SOC"].as<float>();
+        mqttBatterySoc = doc[socKey].as<float>();
         updated = true;
       }
       if (updated)
