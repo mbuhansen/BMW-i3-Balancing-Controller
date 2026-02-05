@@ -110,6 +110,12 @@ uint32_t lastDataUpdate = 0;
 bool balancingPaused = false;
 unsigned long balancingCycleTimer = 0;
 
+// Voltage filtering for stable balancing decisions
+float filteredLowestVoltage = 0.0f;
+float filteredHighestVoltage = 0.0f;
+bool voltageFilterInit = false;
+float voltageFilterAlpha = 0.2f;  // Exponential filter: halving time ~3.1 updates
+
 // (Unused legacy variables removed)
 
 // Single-core mode - all tasks run on Core 1 (WiFi core)
@@ -1105,7 +1111,7 @@ void readCANMessages()
   }
 }
 
-// Calculate lowest cell voltage across all modules
+// Calculate lowest cell voltage across all modules (with exponential filtering for stable balancing)
 float getLowestCellVoltage()
 {
   float lowest = 5.0f;
@@ -1122,10 +1128,21 @@ float getLowestCellVoltage()
     }
   }
 
-  return lowest;
+  // Apply exponential filter for stable balancing decisions
+  if (!voltageFilterInit)
+  {
+    filteredLowestVoltage = lowest;
+    voltageFilterInit = true;
+  }
+  else if (lowest > 0.5f)
+  {
+    filteredLowestVoltage = voltageFilterAlpha * lowest + (1.0f - voltageFilterAlpha) * filteredLowestVoltage;
+  }
+
+  return filteredLowestVoltage;
 }
 
-// Calculate highest cell voltage across all modules
+// Calculate highest cell voltage across all modules (with exponential filtering for stable balancing)
 float getHighestCellVoltage()
 {
   float highest = 0.0f;
@@ -1142,7 +1159,18 @@ float getHighestCellVoltage()
     }
   }
 
-  return highest;
+  // Apply exponential filter for stable balancing decisions
+  if (!voltageFilterInit)
+  {
+    filteredHighestVoltage = highest;
+    voltageFilterInit = true;
+  }
+  else if (highest > 0.5f)
+  {
+    filteredHighestVoltage = voltageFilterAlpha * highest + (1.0f - voltageFilterAlpha) * filteredHighestVoltage;
+  }
+
+  return filteredHighestVoltage;
 }
 
 // Send balancing command AND voltage requests to slave modules via TWAI
