@@ -389,22 +389,22 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
   if (topicStr == "BE/info")
   {
     JsonDocument filter;
-    filter["battery_current_2"] = true;
-    filter["SOC_2"] = true;
+    filter["battery_current"] = true;
+    filter["SOC"] = true;
 
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, payloadStr, DeserializationOption::Filter(filter));
     if (!error)
     {
       bool updated = false;
-      if (doc["battery_current_2"].is<float>() || doc["battery_current_2"].is<double>() || doc["battery_current_2"].is<int>())
+      if (doc["battery_current"].is<float>() || doc["battery_current"].is<double>() || doc["battery_current"].is<int>())
       {
-        mqttBatteryCurrent = doc["battery_current_2"].as<float>();
+        mqttBatteryCurrent = doc["battery_current"].as<float>();
         updated = true;
       }
-      if (doc["SOC_2"].is<float>() || doc["SOC_2"].is<double>() || doc["SOC_2"].is<int>())
+      if (doc["SOC"].is<float>() || doc["SOC"].is<double>() || doc["SOC"].is<int>())
       {
-        mqttBatterySoc = doc["SOC_2"].as<float>();
+        mqttBatterySoc = doc["SOC"].as<float>();
         updated = true;
       }
       if (updated)
