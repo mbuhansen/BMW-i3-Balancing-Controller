@@ -505,8 +505,10 @@ void processMQTT()
       doc["voltage_lowest"] = serialized(String(lowest, 3));
       doc["voltage_highest"] = serialized(String(highest, 3));
 
-      // If no valid cell data, send 0 for diff instead of -5000
-      float diff_mv = (lowest < 5.0f) ? (highest - lowest) * 1000.0f : 0.0f;
+      // If no valid cell data, send 0 for diff instead of negative values
+      float diff_mv = (lowest < 5.0f && highest > 0.5f) ? (highest - lowest) * 1000.0f : 0.0f;
+      if (diff_mv < 0.0f)
+        diff_mv = 0.0f;
       doc["voltage_diff_mv"] = serialized(String(diff_mv, 0));
 
       // Module balancing status
