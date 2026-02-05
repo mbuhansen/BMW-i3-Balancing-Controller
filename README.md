@@ -50,16 +50,9 @@ This board has the necessary dual CAN interface to handle gateway operations bet
 ### LilyGO T-2CAN
 
 ```
-TWAI CAN (CAN B) → BMW i3 Slave Modules
-  GPIO 7 (TX)
-  GPIO 6 (RX)
+TWAI CAN (CAN B) → Ekstern BMS
 
-MCP2515 CAN (CAN A) → Ekstern BMS
-  GPIO 10 (CS)
-  GPIO 8 (INT)
-  GPIO 12 (SCK)
-  GPIO 11 (MOSI)
-  GPIO 13 (MISO)
+MCP2515 CAN (CAN A) → BMW i3 Slave Modules
 ```
 
 **Power Supply (CRITICAL)**:
@@ -78,16 +71,16 @@ MCP2515 CAN (CAN A) → Ekstern BMS
                                     │  ┌──────────┐      ┌──────────┐    │
                                     │  │  TWAI    │      │ MCP2515  │    │
                                     │  │  (CAN B) │      │ (CAN A)  │    │
-                                    │  │  GPIO 7  │      │ GPIO 10  │    │
-                                    │  │  GPIO 6  │      │ GPIO 8   │    │
+                                    │  │          │      │          │    │
+                                    │  │          │      │          │    │
                                     │  └────┬─────┘      └─────┬────┘    │
                                     │       │                  │         │
                                     │       │                  │         │
                                     └───────┼──────────────────┼─────────┘
                                             │                  │
                                       ┌─────┴─────┐      ┌─────┴─────┐
-                                      │  CAN_H    │      │  CAN_H    │
-                                      │  CAN_L    │      │  CAN_L    │
+                          BMS Pin 1   │  CAN_H    │      │  CAN_H    │ Yellow/red
+                          BMS Pin 2   │  CAN_L    │      │  CAN_L    │ Yellow/brown
                                       │           │      │           │
                                       └─────┬─────┘      └─────┬─────┘
                                             │                  │
@@ -128,12 +121,18 @@ Power Connections:
 
 **Connection Details:**
 - **TWAI CAN B** (GPIO 7 TX, GPIO 6 RX) → External BMS
+  - BMS CanH pin 1 Yellow/red
+  - BMS CanL pin 2 Yellow/brown
   - Direct connection to BMS
-  - Used for monitoring and transparent gateway mode
+  - Used for report data back to BMS
   - Lilygo has 120Ω termination resistor
+  - no spare resistor nedded
   
-- **MCP2515 CAN A** (Internal SPI connection) → Slave Module 8
-  - Connects to CAN loop at Slave Module 8
+- **MCP2515 CAN A** (Internal SPI connection) → Slave Module
+  - Slave modul CanH Yellow/red wire to CanL A
+  - Slave modul Can L Yellow/brown wire to CanH A
+  - no spare resistor nedded
+  - Connects to CAN loop at Slave Module 
   - CAN loop: BMS → Slave Module 1 → ... → Slave Module 8 → back to BMS
   - BMS has built-in 120Ω termination resistor
   - Lilygo has 120Ω termination resistor
@@ -144,10 +143,8 @@ Power Connections:
   - Ensures proper ground reference for CAN communication
 
 **Note**: 
-- MCP2515 er påkrævet for gateway funktionalitet (forbindelse til BMS)
-- TWAI forbindes direkte til BMW i3 slave moduler
-- T-2CAN har indbyggede CAN transceivers
-- T-2CAN har ingen onboard LED
+- TWAI er påkrævet for gateway funktionalitet (forbindelse til BMS)
+- MCP2515 forbindes direkte til BMW i3 slave moduler
 
 ## Installation
 
@@ -203,8 +200,8 @@ The correct power-up sequence is critical to avoid slave module errors:
    - Error state clears and system becomes operational
 
 **If you encounter slave module errors:**
-- Temporarily connect **both CAN bus lines** to MCP2515 (both TWAI and MCP2515 connected)
-- Wait for errors to clear 
+- Temporarily connect **both CAN bus lines** to MCP2515 CAN A
+- Wait for errors to clear ( this can few min up to maybe a hour)
 - Then move BMS CAN bus back to TWAI CAN B
 - System will now operate normally
 
@@ -220,13 +217,13 @@ The correct power-up sequence is critical to avoid slave module errors:
 The controller operates as a transparent gateway:
 
 1. **Normal Operation**: 
-   - Forwards BMS requests (0x080-0x08F) from MCP2515 → slave modules via TWAI
-   - Forwards slave responses (0x100-0x1FF) from TWAI → BMS via MCP2515
+   - Forwards BMS requests (0x080-0x08F) from TWAI → slave modules via MCP2515
+   - Forwards slave responses (0x100-0x1FF) from MCP2515 → BMS via TWAI 
    - Continuously monitors all 96 cell voltages
 
 2. **Balancing Mode**:
    - Blocks BMS requests (not forwarded)
-   - Sends own balancing commands + voltage requests to slave modules
+   - Sends own balancing commands + voltage requests and balancing target to slave modules
    - Still forwards slave responses back to BMS
    - Balances cells when voltage difference exceeds threshold
 
@@ -257,7 +254,6 @@ The responsive web interface displays:
   - ▶ Start Balancing (Manual)
   - ⏹ Stop / Gateway Mode
   - 🔄 Auto Mode
-  - 🔀 Gateway Mode
 
 ### Automatic Mode (Default)
 
@@ -309,6 +305,15 @@ All credentials are configured in `src/credentials.h`:
    ```
 
 3. **Enable MQTT in web interface** after first boot
+
+### MQTT Battery Emulator (Discharge Block)
+
+The controller can read battery emulator data from MQTT and pause balancing while the battery is discharging. This prevents balancing during load and resumes automatically when discharge stops.
+
+- Source: MQTT payload on BE/info from the battery emulator
+- Used values: `battery_current` + `SOC` (or `battery_current_2` + `SOC_2` when controller suffix is `2`)
+- Behavior: If discharge is detected or data becomes stale, balancing is blocked until values return to normal
+- Setting: Enable **MQTT Discharge Block** in the web interface (default is OFF)
 
 ### Other Configuration
 
@@ -398,12 +403,16 @@ Data:
   [7]:   CRC8 checksum
 ```
 
-### Incoming Messages (0x000-0x05F)
+### Incoming Messages (0x100-0x17F)
 
-Module responses contain:
-- **0xXX0**: Error codes and balance status
-- **0xX21-0xX25**: Cell voltages (groups of 3 cells)
-- **Temperature data** (if requested)
+Module responses contain (where X is the module number 0-7):
+- **0x10X**: Error codes and balance status
+- **0x12X**: Cell voltages (Cells 1-3)
+- **0x13X**: Cell voltages (Cells 4-6)
+- **0x14X**: Cell voltages (Cells 7-9)
+- **0x15X**: Cell voltages (Cells 10-12)
+- **0x16X**: Module Total Voltage
+- **0x17X**: Temperature data
 
 ## Troubleshooting
 
@@ -414,10 +423,10 @@ Module responses contain:
 - Controller will retry for 15 seconds
 
 ### No modules detected
-- Check CAN bus wiring (CAN_H, CAN_L, GND)
+- Check CAN bus wiring (CAN_H, CAN_L)
 - Verify 120Ω termination resistors
 - Check CAN bus voltage (2.5V idle on both lines)
-- Ensure battery is awake (SimpleBMS sending queries)
+- Ensure battery is awake (battery emulator on)
 
 ### Balancing not starting
 - Verify MCP2515 is connected and detected (shows on web interface)
