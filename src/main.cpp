@@ -2565,6 +2565,10 @@ const char index_html[] PROGMEM = R"rawliteral(
             const scaleMaxMv = scaleMax * 1000.0;
             const scaleRangeMv = Math.max(1.0, scaleMaxMv - scaleMinMv);
             
+            // Find the actual lowest and highest cells among valid cells
+            const lowestCell = cellsForStats.reduce((min, c) => c.voltage < min.voltage ? c : min);
+            const highestCell = cellsForStats.reduce((max, c) => c.voltage > max.voltage ? c : max);
+            
             // Track if we've already marked the lowest and highest cells
             let markedLowest = false;
             let markedHighest = false;
@@ -2580,11 +2584,11 @@ const char index_html[] PROGMEM = R"rawliteral(
                 heightPx = Math.max(minBarPx, Math.min(maxBarPx, heightPx));
                 bar.style.height = `${heightPx}px`;
                 
-                // Highlight only ONE lowest and ONE highest cell
-                if (!markedLowest && cell.voltage <= minVoltage + 0.001) { // Fuzzy match for float
+                // Highlight only ONE lowest and ONE highest cell - by exact match
+                if (!markedLowest && cell.moduleId === lowestCell.moduleId && cell.cellIndex === lowestCell.cellIndex) {
                     bar.classList.add('lowest');
                     markedLowest = true;
-                } else if (!markedHighest && cell.voltage >= maxVoltage - 0.001) {
+                } else if (!markedHighest && cell.moduleId === highestCell.moduleId && cell.cellIndex === highestCell.cellIndex) {
                     bar.classList.add('highest');
                     markedHighest = true;
                 }
