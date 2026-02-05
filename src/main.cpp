@@ -48,6 +48,14 @@ String controllerSuffix = "";       // Suffix for controller name (e.g. "1", "2"
 bool dutyCycleEnabled = true;       // Setting: Enable 15m Run / 5m Pause duty cycle (default ON)
 uint16_t dutyCycleOnMinutes = 9;    // Setting: Duty cycle ON time in minutes (4-9, default 9)
 uint16_t dutyCyclePauseMinutes = 2; // Setting: Duty cycle PAUSE time in minutes (1-10, default 2)
+bool mqttDischargeBlockEnabled = false; // Setting: Block balancing on discharge (MQTT)
+
+// MQTT discharge blocking thresholds
+const float DISCHARGE_STOP_THRESHOLD_A = -1.0f;
+const float DISCHARGE_RESUME_THRESHOLD_A = -0.2f;
+const unsigned long DISCHARGE_STOP_DELAY_MS = 10000;
+const unsigned long DISCHARGE_RESUME_DELAY_MS = 120000;
+const unsigned long DISCHARGE_MQTT_TIMEOUT_MS = 15000;
 
 // BMW CRC8 finalxor values for COMMAND messages (0x080-0x08F)
 // Original values from SimpleBMS - used when modifying BMS commands
@@ -135,6 +143,13 @@ PubSubClient mqttClient(espClient);
 unsigned long lastMqttPublish = 0;
 const unsigned long MQTT_PUBLISH_INTERVAL = 15000;
 unsigned long mqttConnectedAt = 0;
+float mqttBatteryCurrent = 0.0f;
+float mqttBatterySoc = -1.0f;
+unsigned long mqttBatteryInfoAt = 0;
+unsigned long dischargeBelowTimer = 0;
+unsigned long dischargeAboveTimer = 0;
+bool dischargeBlockActive = false;
+bool dischargeBlockWasBalancing = false;
 
 // Telnet server for remote logging (Port 23)
 WiFiServer telnetServer(23);
@@ -371,6 +386,33 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
     payloadStr += (char)payload[i];
   }
 
+  if (topicStr == "BE/info")
+  {
+    StaticJsonDocument<96> filter;
+    filter["battery_current_2"] = true;
+    filter["SOC_2"] = true;
+
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, payloadStr, DeserializationOption::Filter(filter));
+    if (!error)
+    {
+      bool updated = false;
+      if (doc["battery_current_2"].is<float>() || doc["battery_current_2"].is<double>() || doc["battery_current_2"].is<int>())
+      {
+        mqttBatteryCurrent = doc["battery_current_2"].as<float>();
+        updated = true;
+      }
+      if (doc["SOC_2"].is<float>() || doc["SOC_2"].is<double>() || doc["SOC_2"].is<int>())
+      {
+        mqttBatterySoc = doc["SOC_2"].as<float>();
+        updated = true;
+      }
+      if (updated)
+        mqttBatteryInfoAt = millis();
+    }
+    return;
+  }
+
   // Ignore retained/stale commands right after reconnect
   if (mqttConnectedAt > 0 && (millis() - mqttConnectedAt) < 2000)
     return;
@@ -388,12 +430,15 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
   {
     balancingActive = true;
     manualMode = true;
+    if (dischargeBlockActive)
+      dischargeBlockWasBalancing = true;
     telnetPrintln("MQTT: Start balancing");
   }
   else if (topicStr == baseTopic + "/cmd/stop")
   {
     balancingActive = false;
     manualMode = true;
+    dischargeBlockWasBalancing = false;
     telnetPrintln("MQTT: Stop balancing - gateway mode");
   }
   else if (topicStr == baseTopic + "/cmd/auto")
@@ -441,6 +486,7 @@ void reconnectMQTT()
       mqttClient.subscribe((baseTopic + "/cmd/start").c_str());
       mqttClient.subscribe((baseTopic + "/cmd/stop").c_str());
       mqttClient.subscribe((baseTopic + "/cmd/auto").c_str());
+      mqttClient.subscribe("BE/info");
       
       mqttConnectedAt = millis();
 
@@ -526,6 +572,75 @@ void processMQTT()
 
       String topic = getBaseTopic() + "/metrics";
       mqttClient.publish(topic.c_str(), buffer);
+    }
+  }
+}
+
+void updateMqttDischargeBlock()
+{
+  if (!mqttDischargeBlockEnabled || !mqttEnabled)
+  {
+    dischargeBlockActive = false;
+    dischargeBlockWasBalancing = false;
+    dischargeBelowTimer = 0;
+    dischargeAboveTimer = 0;
+    return;
+  }
+
+  unsigned long now = millis();
+  bool dataStale = (mqttBatteryInfoAt == 0) || (now - mqttBatteryInfoAt > DISCHARGE_MQTT_TIMEOUT_MS);
+
+  if (dataStale)
+  {
+    dischargeBelowTimer = 0;
+    dischargeAboveTimer = 0;
+  }
+  else
+  {
+    if (mqttBatteryCurrent < DISCHARGE_STOP_THRESHOLD_A)
+    {
+      if (dischargeBelowTimer == 0)
+        dischargeBelowTimer = now;
+    }
+    else
+    {
+      dischargeBelowTimer = 0;
+    }
+
+    if (mqttBatteryCurrent > DISCHARGE_RESUME_THRESHOLD_A)
+    {
+      if (dischargeAboveTimer == 0)
+        dischargeAboveTimer = now;
+    }
+    else
+    {
+      dischargeAboveTimer = 0;
+    }
+  }
+
+  bool blockRequested = dataStale || (dischargeBelowTimer > 0 && (now - dischargeBelowTimer >= DISCHARGE_STOP_DELAY_MS));
+  bool clearRequested = !dataStale && (dischargeAboveTimer > 0 && (now - dischargeAboveTimer >= DISCHARGE_RESUME_DELAY_MS));
+
+  if (blockRequested)
+  {
+    if (!dischargeBlockActive)
+    {
+      dischargeBlockActive = true;
+      dischargeBlockWasBalancing = balancingActive;
+      telnetPrintln("MQTT discharge block: Balancing paused");
+    }
+    if (balancingActive)
+      dischargeBlockWasBalancing = true;
+    balancingActive = false;
+  }
+  else if (dischargeBlockActive && clearRequested)
+  {
+    dischargeBlockActive = false;
+    if (dischargeBlockWasBalancing)
+    {
+      balancingActive = true;
+      dischargeBlockWasBalancing = false;
+      telnetPrintln("MQTT discharge block: Balancing resumed");
     }
   }
 }
@@ -1308,12 +1423,15 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         {
           balancingActive = true;
           manualMode = true;
+          if (dischargeBlockActive)
+            dischargeBlockWasBalancing = true;
           telnetPrintln("Manual start - balancing active (intercepts BMS requests)");
         }
         else if (strcmp(command, "stop") == 0)
         {
           balancingActive = false;
           manualMode = true;
+          dischargeBlockWasBalancing = false;
           telnetPrintln("Manual stop - gateway mode (forwards BMS requests)");
         }
         else if (strcmp(command, "auto") == 0)
@@ -1380,6 +1498,13 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
             mqttEnabled = doc["mqttEnabled"];
             preferences.putBool("mqttEnabled", mqttEnabled);
             Serial.printf("MQTT Enabled set to %s\n", mqttEnabled ? "YES" : "NO");
+            changed = true;
+          }
+          if (doc["mqttDischargeBlockEnabled"].is<bool>())
+          {
+            mqttDischargeBlockEnabled = doc["mqttDischargeBlockEnabled"];
+            preferences.putBool("mqttDischargeBlock", mqttDischargeBlockEnabled);
+            Serial.printf("MQTT Discharge Block set to %s\n", mqttDischargeBlockEnabled ? "YES" : "NO");
             changed = true;
           }
           if (doc["dutyCycleEnabled"].is<bool>())
@@ -1537,9 +1662,13 @@ void performBroadcast()
   doc["controllerSuffix"] = controllerSuffix;
   doc["autoModeAtStartup"] = autoModeAtStartup;
   doc["mqttEnabled"] = mqttEnabled;
+  doc["mqttDischargeBlockEnabled"] = mqttDischargeBlockEnabled;
   doc["dutyCycleEnabled"] = dutyCycleEnabled;
   doc["dutyCycleOnMinutes"] = dutyCycleOnMinutes;
   doc["dutyCyclePauseMinutes"] = dutyCyclePauseMinutes;
+  doc["mqttBatteryCurrent"] = mqttBatteryCurrent;
+  doc["mqttBatterySoc"] = mqttBatterySoc;
+  doc["mqttBatteryInfoAgeMs"] = (mqttBatteryInfoAt > 0) ? (millis() - mqttBatteryInfoAt) : 0;
 
   JsonArray modulesArray = doc["modules"].to<JsonArray>();
 
@@ -2202,6 +2331,15 @@ const char index_html[] PROGMEM = R"rawliteral(
                         </div>
                     </div>
                     <div class="setting-item">
+                      <div class="setting-label">MQTT Discharge Block</div>
+                      <div class="setting-input-group">
+                        <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                          <input type="checkbox" id="mqttDischargeBlockEnabled" style="width: 20px; height: 20px;">
+                          <span style="font-size: 0.9em; opacity: 0.8;">Stop balancing on discharge</span>
+                        </label>
+                      </div>
+                    </div>
+                    <div class="setting-item">
                         <div class="setting-label">Duty Cycle Balancing</div>
                         <div class="setting-input-group">
                             <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
@@ -2292,6 +2430,9 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (data.mqttEnabled !== undefined) {
                  document.getElementById('mqttEnabled').checked = data.mqttEnabled;
             }
+              if (data.mqttDischargeBlockEnabled !== undefined) {
+                document.getElementById('mqttDischargeBlockEnabled').checked = data.mqttDischargeBlockEnabled;
+              }
             if (data.dutyCycleEnabled !== undefined) {
                  document.getElementById('dutyCycleEnabled').checked = data.dutyCycleEnabled;
             }
@@ -2624,7 +2765,15 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (data.totalVoltage > 0) {
                 totalVoltageStr = ' | Total: ' + data.totalVoltage.toFixed(2) + 'V';
             }
-            chartInfo.textContent = `Range: ${minVoltage.toFixed(3)}V - ${maxVoltage.toFixed(3)}V | Δ${(voltageRange * 1000).toFixed(1)}mV | Status: ${data.status} | Target: ${data.activeTargetVoltage.toFixed(3)}V` + totalVoltageStr;
+            let mqttInfoStr = '';
+            const mqttFresh = data.mqttBatteryInfoAgeMs !== undefined && data.mqttBatteryInfoAgeMs > 0 && data.mqttBatteryInfoAgeMs < 20000;
+            if (mqttFresh && data.mqttBatteryCurrent !== undefined) {
+              mqttInfoStr = ' | Current: ' + data.mqttBatteryCurrent.toFixed(1) + 'A';
+              if (data.mqttBatterySoc !== undefined && data.mqttBatterySoc >= 0) {
+                mqttInfoStr += ' | SOC: ' + data.mqttBatterySoc.toFixed(1) + '%';
+              }
+            }
+            chartInfo.textContent = `Range: ${minVoltage.toFixed(3)}V - ${maxVoltage.toFixed(3)}V | Δ${(voltageRange * 1000).toFixed(1)}mV | Status: ${data.status} | Target: ${data.activeTargetVoltage.toFixed(3)}V` + totalVoltageStr + mqttInfoStr;
         }
         
         function sendCommand(cmd) {
@@ -2649,6 +2798,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             const controllerSuffix = document.getElementById('controllerSuffix').value;
             const autoModeAtStartup = document.getElementById('autoModeAtStartup').checked;
             const mqttEnabled = document.getElementById('mqttEnabled').checked;
+            const mqttDischargeBlockEnabled = document.getElementById('mqttDischargeBlockEnabled').checked;
             const dutyCycleEnabled = document.getElementById('dutyCycleEnabled').checked;
             const dutyCycleOnMinutes = parseInt(document.getElementById('dutyCycleOnMinutes').value);
             const dutyCyclePauseMinutes = parseInt(document.getElementById('dutyCyclePauseMinutes').value);
@@ -2663,6 +2813,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                     controllerSuffix: controllerSuffix,
                     autoModeAtStartup: autoModeAtStartup,
                     mqttEnabled: mqttEnabled,
+                    mqttDischargeBlockEnabled: mqttDischargeBlockEnabled,
                     dutyCycleEnabled: dutyCycleEnabled,
                     dutyCycleOnMinutes: dutyCycleOnMinutes,
                     dutyCyclePauseMinutes: dutyCyclePauseMinutes
@@ -2778,6 +2929,7 @@ void setup()
   controllerSuffix = preferences.getString("suffix", "");
   autoModeAtStartup = preferences.getBool("autoStart", false);
   mqttEnabled = preferences.getBool("mqttEnabled", false);
+  mqttDischargeBlockEnabled = preferences.getBool("mqttDischargeBlock", false);
   dutyCycleEnabled = preferences.getBool("dutyCycle", true);
   dutyCycleOnMinutes = preferences.getUInt("dutyOnMin", 6);
   dutyCyclePauseMinutes = preferences.getUInt("dutyPauseMin", 5);
@@ -2796,6 +2948,7 @@ void setup()
   Serial.printf("- Suffix: '%s'\n", controllerSuffix.c_str());
   Serial.printf("- Auto Start: %s\n", autoModeAtStartup ? "YES" : "NO");
   Serial.printf("- MQTT Enabled: %s\n", mqttEnabled ? "YES" : "NO");
+  Serial.printf("- MQTT Discharge Block: %s\n", mqttDischargeBlockEnabled ? "YES" : "NO");
   Serial.printf("- Duty Cycle: %s\n", dutyCycleEnabled ? "YES" : "NO");
   Serial.printf("- Duty Cycle ON Time: %u minutes\n", dutyCycleOnMinutes);
   Serial.printf("- Duty Cycle PAUSE Time: %u minutes\n", dutyCyclePauseMinutes);
@@ -2946,6 +3099,9 @@ void loop()
 
   // Process MQTT
   processMQTT();
+
+  // Apply MQTT-based discharge blocking (if enabled)
+  updateMqttDischargeBlock();
 
   // Clean up WebSocket clients
   static uint32_t lastWSCleanup = 0;
