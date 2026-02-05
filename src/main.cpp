@@ -2565,6 +2565,10 @@ const char index_html[] PROGMEM = R"rawliteral(
             const scaleMaxMv = scaleMax * 1000.0;
             const scaleRangeMv = Math.max(1.0, scaleMaxMv - scaleMinMv);
             
+            // Track if we've already marked the lowest and highest cells
+            let markedLowest = false;
+            let markedHighest = false;
+            
             // Create bars for each cell
             allCells.forEach(cell => {
                 const bar = document.createElement('div');
@@ -2576,11 +2580,13 @@ const char index_html[] PROGMEM = R"rawliteral(
                 heightPx = Math.max(minBarPx, Math.min(maxBarPx, heightPx));
                 bar.style.height = `${heightPx}px`;
                 
-                // Highlight lowest and highest cells
-                if (cell.voltage <= minVoltage + 0.001) { // Fuzzy match for float
+                // Highlight only ONE lowest and ONE highest cell
+                if (!markedLowest && cell.voltage <= minVoltage + 0.001) { // Fuzzy match for float
                     bar.classList.add('lowest');
-                } else if (cell.voltage >= maxVoltage - 0.001) {
+                    markedLowest = true;
+                } else if (!markedHighest && cell.voltage >= maxVoltage - 0.001) {
                     bar.classList.add('highest');
+                    markedHighest = true;
                 }
                 
                 // Add tooltip
