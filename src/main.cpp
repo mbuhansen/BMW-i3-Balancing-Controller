@@ -40,15 +40,15 @@
 #define CAN_COMMAND_INTERVAL_MS 20 // Send commands every 20ms (match BMS rate)
 
 // Balancing configuration (runtime adjustable)
-float minBalanceVoltage = 3.99f;    // Minimum voltage to start balancing (V)
-float balanceThresholdMv = 10.0f;   // Start balancing if cells differ by more than this (mV)
-float balanceHysteresisMv = 5.0f;   // Stop balancing when within this (mV)
-float cellVoltageOffset = 0.004f;   // Voltage offset added to target (V) - typically 4mV
-String controllerSuffix = "";       // Suffix for controller name (e.g. "1", "2")
-bool dutyCycleEnabled = true;       // Setting: Enable 15m Run / 5m Pause duty cycle (default ON)
-uint16_t dutyCycleOnMinutes = 9;    // Setting: Duty cycle ON time in minutes (4-9, default 9)
+float minBalanceVoltage = 3.99f;       // Minimum voltage to start balancing (V)
+float balanceThresholdMv = 10.0f;      // Start balancing if cells differ by more than this (mV)
+float balanceHysteresisMv = 5.0f;      // Stop balancing when within this (mV)
+float cellVoltageOffset = 0.004f;      // Voltage offset added to target (V) - typically 4mV
+String controllerSuffix = "";          // Suffix for controller name (e.g. "1", "2")
+bool dutyCycleEnabled = true;          // Setting: Enable 15m Run / 5m Pause duty cycle (default ON)
+uint16_t dutyCycleOnMinutes = 9;       // Setting: Duty cycle ON time in minutes (4-9, default 9)
 uint16_t dutyCyclePauseMinutes = 2; // Setting: Duty cycle PAUSE time in minutes (1-10, default 2)
-bool mqttDischargeBlockEnabled = true; // Setting: Block balancing on high current (Charge/Discharge) (MQTT)
+bool mqttDischargeBlockEnabled = false; // Setting: Block balancing on high current (Charge/Discharge) (MQTT)
 
 // MQTT discharge blocking thresholds
 const float DISCHARGE_STOP_THRESHOLD_A = -1.0f;
@@ -124,7 +124,7 @@ unsigned long balancingCycleTimer = 0;
 float filteredLowestVoltage = 0.0f;
 float filteredHighestVoltage = 0.0f;
 bool voltageFilterInit = false;
-float voltageFilterAlpha = 0.2f;  // Exponential filter: halving time ~3.1 updates
+float voltageFilterAlpha = 0.2f; // Exponential filter: halving time ~3.1 updates
 
 // (Unused legacy variables removed)
 
@@ -380,7 +380,7 @@ void sendHADiscovery()
 
 // MQTT Functions
 // MQTT Callback - Handle incoming commands from Home Assistant
-void mqttCallback(char* topic, byte* payload, unsigned int length)
+void mqttCallback(char *topic, byte *payload, unsigned int length)
 {
   String topicStr = String(topic);
   String payloadStr = "";
@@ -487,17 +487,17 @@ void reconnectMQTT()
     if (connected)
     {
       telnetPrintln("MQTT Connected");
-      
+
       // Set callback for incoming messages
       mqttClient.setCallback(mqttCallback);
-      
+
       // Subscribe to command topics
       String baseTopic = getBaseTopic();
       mqttClient.subscribe((baseTopic + "/cmd/start").c_str());
       mqttClient.subscribe((baseTopic + "/cmd/stop").c_str());
       mqttClient.subscribe((baseTopic + "/cmd/auto").c_str());
       mqttClient.subscribe("BE/info");
-      
+
       mqttConnectedAt = millis();
 
       String statusTopic = baseTopic + "/status";
@@ -643,7 +643,7 @@ void updateMqttDischargeBlock()
     }
   }
 
-  bool blockRequested = dataStale || 
+  bool blockRequested = dataStale ||
                         (dischargeBelowTimer > 0 && (now - dischargeBelowTimer >= DISCHARGE_STOP_DELAY_MS)) ||
                         (chargeStopTimer > 0 && (now - chargeStopTimer >= DISCHARGE_STOP_DELAY_MS));
 
