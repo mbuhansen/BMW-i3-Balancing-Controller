@@ -1001,7 +1001,9 @@ void readCANMessages()
 
           // Hvis vi balancerer OG modulet har balance-flag sat, så ignorer de rå mcp_data
           // og byg pakken fra de stabile værdier vi har i 'modules' (dem som WebUI også bruger)
-          if (balancingActive && !balancingPaused && balancingFlagSet)
+          // ÆNDRET: Vi maskerer nu ALTID når balancingActive er true, uanset flag/pause
+          // Dette forhindrer spikes ved overgange hvor flaget skifter
+          if (balancingActive)
           {
             // Kopier KUN byte 6 (counter) - checksum beregnes bagefter
             forward_msg.data[6] = mcp_data[6];
