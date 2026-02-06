@@ -48,11 +48,13 @@ String controllerSuffix = "";       // Suffix for controller name (e.g. "1", "2"
 bool dutyCycleEnabled = true;       // Setting: Enable 15m Run / 5m Pause duty cycle (default ON)
 uint16_t dutyCycleOnMinutes = 9;    // Setting: Duty cycle ON time in minutes (4-9, default 9)
 uint16_t dutyCyclePauseMinutes = 2; // Setting: Duty cycle PAUSE time in minutes (1-10, default 2)
-bool mqttDischargeBlockEnabled = false; // Setting: Block balancing on discharge (MQTT)
+bool mqttDischargeBlockEnabled = true; // Setting: Block balancing on high current (Charge/Discharge) (MQTT)
 
 // MQTT discharge blocking thresholds
 const float DISCHARGE_STOP_THRESHOLD_A = -1.0f;
 const float DISCHARGE_RESUME_THRESHOLD_A = -0.2f;
+const float CHARGE_STOP_THRESHOLD_A = 2.0f;
+const float CHARGE_RESUME_THRESHOLD_A = 1.8f;
 const unsigned long DISCHARGE_STOP_DELAY_MS = 10000;
 const unsigned long DISCHARGE_RESUME_DELAY_MS = 120000;
 const unsigned long DISCHARGE_MQTT_TIMEOUT_MS = 15000;
@@ -147,6 +149,7 @@ float mqttBatteryCurrent = 0.0f;
 float mqttBatterySoc = -1.0f;
 unsigned long mqttBatteryInfoAt = 0;
 unsigned long dischargeBelowTimer = 0;
+unsigned long chargeStopTimer = 0;
 unsigned long dischargeAboveTimer = 0;
 bool dischargeBlockActive = false;
 bool dischargeBlockWasBalancing = false;
@@ -590,6 +593,7 @@ void updateMqttDischargeBlock()
     dischargeBlockActive = false;
     dischargeBlockWasBalancing = false;
     dischargeBelowTimer = 0;
+    chargeStopTimer = 0;
     dischargeAboveTimer = 0;
     return;
   }
@@ -600,10 +604,12 @@ void updateMqttDischargeBlock()
   if (dataStale)
   {
     dischargeBelowTimer = 0;
+    chargeStopTimer = 0;
     dischargeAboveTimer = 0;
   }
   else
   {
+    // Check for Discharge Block (Current < -1.0A)
     if (mqttBatteryCurrent < DISCHARGE_STOP_THRESHOLD_A)
     {
       if (dischargeBelowTimer == 0)
@@ -614,7 +620,19 @@ void updateMqttDischargeBlock()
       dischargeBelowTimer = 0;
     }
 
-    if (mqttBatteryCurrent > DISCHARGE_RESUME_THRESHOLD_A)
+    // Check for Charge Block (Current > 2.0A)
+    if (mqttBatteryCurrent > CHARGE_STOP_THRESHOLD_A)
+    {
+      if (chargeStopTimer == 0)
+        chargeStopTimer = now;
+    }
+    else
+    {
+      chargeStopTimer = 0;
+    }
+
+    // Check for Safe Zone to Resume (Current > -0.2A AND Current < 1.8A)
+    if (mqttBatteryCurrent > DISCHARGE_RESUME_THRESHOLD_A && mqttBatteryCurrent < CHARGE_RESUME_THRESHOLD_A)
     {
       if (dischargeAboveTimer == 0)
         dischargeAboveTimer = now;
@@ -625,7 +643,10 @@ void updateMqttDischargeBlock()
     }
   }
 
-  bool blockRequested = dataStale || (dischargeBelowTimer > 0 && (now - dischargeBelowTimer >= DISCHARGE_STOP_DELAY_MS));
+  bool blockRequested = dataStale || 
+                        (dischargeBelowTimer > 0 && (now - dischargeBelowTimer >= DISCHARGE_STOP_DELAY_MS)) ||
+                        (chargeStopTimer > 0 && (now - chargeStopTimer >= DISCHARGE_STOP_DELAY_MS));
+
   bool clearRequested = !dataStale && (dischargeAboveTimer > 0 && (now - dischargeAboveTimer >= DISCHARGE_RESUME_DELAY_MS));
 
   if (blockRequested)
@@ -2343,11 +2364,11 @@ const char index_html[] PROGMEM = R"rawliteral(
                         </div>
                     </div>
                     <div class="setting-item">
-                      <div class="setting-label">MQTT Discharge Block</div>
+                      <div class="setting-label">MQTT Discharge/Charge Block</div>
                       <div class="setting-input-group">
                         <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
                           <input type="checkbox" id="mqttDischargeBlockEnabled" style="width: 20px; height: 20px;">
-                          <span style="font-size: 0.9em; opacity: 0.8;">Stop balancing on discharge</span>
+                          <span style="font-size: 0.9em; opacity: 0.8;">Stop balancing on high current</span>
                         </label>
                       </div>
                     </div>
