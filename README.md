@@ -306,14 +306,14 @@ All credentials are configured in `src/credentials.h`:
 
 3. **Enable MQTT in web interface** after first boot
 
-### MQTT Battery Emulator (Discharge Block)
+### MQTT Battery Emulator (Discharge/Charge Block)
 
-The controller can read battery emulator data from MQTT and pause balancing while the battery is discharging. This prevents balancing during load and resumes automatically when discharge stops.
+The controller can read battery emulator data from MQTT and pause balancing during high current flow (both discharging and charging). This prevents balancing under load or during active charging and resumes automatically when current stabilizes.
 
-- Source: MQTT payload on BE/info from the battery emulator
-- Used values: `battery_current` + `SOC` (or `battery_current_2` + `SOC_2` when controller suffix is `2`)
-- Behavior: If discharge is detected or data becomes stale, balancing is blocked until values return to normal
-- Setting: Enable **MQTT Discharge Block** in the web interface (default is OFF)
+- Source: MQTT payload on `BE/info` from the battery emulator
+- Used values: `battery_current` + `SOC` (or `battery_current_2` + `SOC_2` when controller suffix is `2` for dual battery setups)
+- Behavior: Balancing is blocked if current is < -1.0A (Discharge) or > 2.0A (Charge). Also blocks if data becomes stale (>15s).
+- Setting: Enable **MQTT Discharge/Charge Block** in the web interface (default is OFF). Requires MQTT Integration to be enabled.
 
 ### Other Configuration
 
