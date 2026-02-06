@@ -2799,21 +2799,26 @@ const char index_html[] PROGMEM = R"rawliteral(
                 totalVoltageStr = ' | Total: ' + data.totalVoltage.toFixed(2) + 'V';
             }
             let mqttInfoStr = '';
-            const mqttFresh = data.mqttBatteryInfoAgeMs !== undefined && data.mqttBatteryInfoAgeMs > 0 && data.mqttBatteryInfoAgeMs < 20000;
-            if (data.mqttBatteryCurrent !== undefined && data.totalVoltage > 0) {
-              const powerW = data.totalVoltage * data.mqttBatteryCurrent;
-              if (Math.abs(powerW) < 1000.0) {
-                mqttInfoStr = ' | Power: ' + powerW.toFixed(0) + 'W';
-              } else {
-                const powerKw = powerW / 1000.0;
-                mqttInfoStr = ' | Power: ' + powerKw.toFixed(2) + 'kW';
-              }
-              if (data.mqttBatterySoc !== undefined && data.mqttBatterySoc >= 0) {
-                mqttInfoStr += ' | SOC: ' + data.mqttBatterySoc.toFixed(1) + '%';
-              }
-              if (!mqttFresh) {
-                mqttInfoStr += ' (stale)';
-              }
+            // Only show MQTT info if Discharge/Charge Block is enabled
+            if (data.mqttDischargeBlockEnabled) {
+                const mqttFresh = data.mqttBatteryInfoAgeMs !== undefined && data.mqttBatteryInfoAgeMs > 0 && data.mqttBatteryInfoAgeMs < 20000;
+                if (data.mqttBatteryCurrent !== undefined && data.totalVoltage > 0) {
+                  mqttInfoStr = ' | Current: ' + data.mqttBatteryCurrent.toFixed(1) + 'A';
+
+                  const powerW = data.totalVoltage * data.mqttBatteryCurrent;
+                  if (Math.abs(powerW) < 1000.0) {
+                    mqttInfoStr += ' | Power: ' + powerW.toFixed(0) + 'W';
+                  } else {
+                    const powerKw = powerW / 1000.0;
+                    mqttInfoStr += ' | Power: ' + powerKw.toFixed(2) + 'kW';
+                  }
+                  if (data.mqttBatterySoc !== undefined && data.mqttBatterySoc >= 0) {
+                    mqttInfoStr += ' | SOC: ' + data.mqttBatterySoc.toFixed(1) + '%';
+                  }
+                  if (!mqttFresh) {
+                    mqttInfoStr += ' (stale)';
+                  }
+                }
             }
             chartInfo.textContent = `Range: ${minVoltage.toFixed(3)}V - ${maxVoltage.toFixed(3)}V | Δ${(voltageRange * 1000).toFixed(1)}mV | Status: ${data.status} | Target: ${data.activeTargetVoltage.toFixed(3)}V` + totalVoltageStr + mqttInfoStr;
         }
