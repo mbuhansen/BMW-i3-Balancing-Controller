@@ -40,7 +40,7 @@
 #define CAN_COMMAND_INTERVAL_MS 20 // Send commands every 20ms (match BMS rate)
 
 // Balancing configuration (runtime adjustable)
-float minBalanceVoltage = 3.99f;       // Minimum voltage to start balancing (V)
+float minBalanceVoltage = 3.9f;       // Minimum voltage to start balancing (V)
 float balanceThresholdMv = 10.0f;      // Start balancing if cells differ by more than this (mV)
 float balanceHysteresisMv = 5.0f;      // Stop balancing when within this (mV)
 float cellVoltageOffset = 0.004f;      // Voltage offset added to target (V) - typically 4mV
