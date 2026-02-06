@@ -2358,7 +2358,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                         <div class="setting-label">MQTT Integration</div>
                         <div class="setting-input-group">
                             <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                                <input type="checkbox" id="mqttEnabled" style="width: 20px; height: 20px;">
+                                <input type="checkbox" id="mqttEnabled" style="width: 20px; height: 20px;" onchange="handleMqttChange()">
                                 <span style="font-size: 0.9em; opacity: 0.8;">Enable MQTT Reporting</span>
                             </label>
                         </div>
@@ -2370,6 +2370,9 @@ const char index_html[] PROGMEM = R"rawliteral(
                           <input type="checkbox" id="mqttDischargeBlockEnabled" style="width: 20px; height: 20px;">
                           <span style="font-size: 0.9em; opacity: 0.8;">Stop balancing on high current</span>
                         </label>
+                      </div>
+                      <div style="font-size: 0.8em; opacity: 0.6; margin-top: 5px; margin-left: 30px; font-style: italic;">
+                        * Requires MQTT data from Battery Emulator
                       </div>
                     </div>
                     <div class="setting-item">
@@ -2404,6 +2407,22 @@ const char index_html[] PROGMEM = R"rawliteral(
     
     <script>
         let ws;
+        
+        function handleMqttChange() {
+             const mqttEnabled = document.getElementById('mqttEnabled').checked;
+             const blockBtn = document.getElementById('mqttDischargeBlockEnabled');
+             
+             if (!mqttEnabled) {
+                 blockBtn.checked = false;
+                 blockBtn.disabled = true;
+                 blockBtn.parentElement.style.opacity = '0.5';
+                 blockBtn.parentElement.style.pointerEvents = 'none';
+             } else {
+                 blockBtn.disabled = false;
+                 blockBtn.parentElement.style.opacity = '1';
+                 blockBtn.parentElement.style.pointerEvents = 'auto';
+             }
+        }
         
         function connectWebSocket() {
             ws = new WebSocket('ws://' + window.location.hostname + '/ws');
@@ -2462,6 +2481,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             }
             if (data.mqttEnabled !== undefined) {
                  document.getElementById('mqttEnabled').checked = data.mqttEnabled;
+                 handleMqttChange();
             }
               if (data.mqttDischargeBlockEnabled !== undefined) {
                 document.getElementById('mqttDischargeBlockEnabled').checked = data.mqttDischargeBlockEnabled;
@@ -2830,7 +2850,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         }
         
         function restartDevice() {
-            if (confirm('Er du sikker på at du vil genstarte enheden?')) {
+            if (confirm('Are you sure you want to restart the device?')) {
                 sendCommand('restart');
                 document.getElementById('connectionStatus').textContent = 'Restarting...';
                 document.getElementById('connectionStatus').className = 'connection-status disconnected';
@@ -2901,11 +2921,11 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (!file) return;
             
             if (!file.name.endsWith('.bin')) {
-                alert('Vælg venligst en .bin fil');
+                alert('Please select a .bin file');
                 return;
             }
             
-            if (!confirm('Upload ny firmware? Enheden vil genstarte efter upload.')) {
+            if (!confirm('Upload new firmware? The device will restart upon completion.')) {
                 fileInput.value = '';
                 return;
             }
@@ -2940,7 +2960,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                     // Upload failed quickly - real error
                     statusEl.textContent = 'Update Failed!';
                     statusEl.className = 'connection-status disconnected';
-                    alert('OTA update fejlede: ' + error);
+                    alert('OTA update failed: ' + error);
                     fileInput.value = '';
                 } else {
                     // Upload took time, connection lost - this is expected during restart
