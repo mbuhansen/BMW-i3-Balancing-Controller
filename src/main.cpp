@@ -1820,6 +1820,17 @@ const char index_html[] PROGMEM = R"rawliteral(
         button.auto { background: linear-gradient(135deg, #10b981 0%, #059669 100%); }
         button.restart { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); font-size: 0.9em; }
         button.ota { background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%); font-size: 0.9em; }
+        .soc-panel {
+          text-align: center;
+        }
+        .soc-value {
+          font-size: 1.5em;
+          font-weight: bold;
+          color: #34d399;
+        }
+        .soc-value.stale {
+          opacity: 0.6;
+        }
         #otaFile { display: none; }
         .status-led-container {
             display: flex;
@@ -2256,7 +2267,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         </div>
         
         <div class="controls">
-            <div style="display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap;">
                 <div style="text-align: center;">
                     <div style="font-size: 0.9em; opacity: 0.8; margin-bottom: 5px;">Active Target</div>
                     <div id="activeTarget" style="font-size: 1.5em; font-weight: bold; color: #34d399;">-.-V</div>
@@ -2264,8 +2275,12 @@ const char index_html[] PROGMEM = R"rawliteral(
                 <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
                     <button onclick="sendCommand('start')">▶ Start Balancing</button>
                     <button class="stop" onclick="sendCommand('stop')">⏹ Stop / Gateway</button>
-                    <button class="auto" onclick="sendCommand('auto')">🔄 Auto Mode</button>
-                </div>
+                <button class="auto" onclick="sendCommand('auto')">🔄 Auto Mode</button>
+              </div>
+              <div class="soc-panel">
+                <div style="font-size: 0.9em; opacity: 0.8; margin-bottom: 5px;">SOC</div>
+                <div class="soc-value" id="socValue">--.-%</div>
+              </div>
             </div>
         </div>
         
@@ -2532,6 +2547,22 @@ const char index_html[] PROGMEM = R"rawliteral(
                 }
             } else {
                 activeTargetElement.textContent = '-.-V';
+            }
+
+            const socElement = document.getElementById('socValue');
+            if (socElement) {
+              let socText = '--.-%';
+              socElement.classList.remove('stale');
+              if (data.mqttBatterySoc !== undefined && data.mqttBatterySoc >= 0) {
+                socText = data.mqttBatterySoc.toFixed(1) + '%';
+                const mqttFresh = data.mqttBatteryInfoAgeMs !== undefined && data.mqttBatteryInfoAgeMs > 0 && data.mqttBatteryInfoAgeMs < 20000;
+                if (!mqttFresh) {
+                  socElement.classList.add('stale');
+                }
+              } else {
+                socElement.classList.add('stale');
+              }
+              socElement.textContent = socText;
             }
             
             if (diff < 10) diffElement.className = 'stat-value good';
