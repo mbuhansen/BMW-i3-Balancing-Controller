@@ -1686,6 +1686,32 @@ void performBroadcast()
   doc["gatewayMode"] = gatewayMode;
   doc["externalMaster"] = externalMasterDetected && (millis() - lastExternalCommandTime < 60000);
   doc["uptime"] = millis() / 1000;
+  String idleReason = "";
+  if (status == "IDLE")
+  {
+    if (dischargeBlockActive)
+    {
+      if (mqttBatteryCurrent <= DISCHARGE_STOP_THRESHOLD_A)
+        idleReason = "Discharge";
+      else if (mqttBatteryCurrent >= CHARGE_STOP_THRESHOLD_A)
+        idleReason = "Charge";
+      else if (mqttBatteryCurrent < 0.0f)
+        idleReason = "Discharge";
+      else if (mqttBatteryCurrent > 0.0f)
+        idleReason = "Charge";
+      else
+        idleReason = "Discharge";
+    }
+    else if (doc["difference"].is<float>() && doc["difference"].as<float>() < balanceHysteresisMv)
+    {
+      idleReason = "Balancing not needed";
+    }
+    else
+    {
+      idleReason = "Waiting to balance";
+    }
+  }
+  doc["idleReason"] = idleReason;
 
   // Send current settings
   doc["minBalanceVoltage"] = minBalanceVoltage;
@@ -1786,6 +1812,12 @@ const char index_html[] PROGMEM = R"rawliteral(
         .stat-value {
             font-size: 1.8em;
             font-weight: bold;
+        }
+        .stat-subvalue {
+          font-size: 0.8em;
+          opacity: 0.7;
+          margin-top: 4px;
+          min-height: 1em;
         }
         .stat-value.good { color: #4ade80; }
         .stat-value.warning { color: #fbbf24; }
@@ -2247,6 +2279,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             <div class="stat-item">
                 <div class="stat-label">Status</div>
                 <div class="stat-value" id="status">IDLE</div>
+              <div class="stat-subvalue" id="statusDetail"></div>
             </div>
             <div class="stat-item">
                 <div class="stat-label">Mode</div>
@@ -2469,6 +2502,17 @@ const char index_html[] PROGMEM = R"rawliteral(
             statusElement.className = 'stat-value';
             if (data.status === 'BALANCING') statusElement.className += ' good';
             else if (data.status === 'GATEWAY') statusElement.className += ' warning';
+
+            const statusDetailElement = document.getElementById('statusDetail');
+            if (statusDetailElement) {
+              if (data.status === 'IDLE' && data.idleReason) {
+                statusDetailElement.textContent = data.idleReason;
+                statusDetailElement.style.display = 'block';
+              } else {
+                statusDetailElement.textContent = '';
+                statusDetailElement.style.display = 'none';
+              }
+            }
             
             // Update settings inputs (only if not currently focused)
             if (document.activeElement.id !== 'minBalanceVoltage' && data.minBalanceVoltage) {
