@@ -2300,7 +2300,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         </div>
         
         <div class="controls">
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap;">
                 <div style="text-align: center;">
                     <div style="font-size: 0.9em; opacity: 0.8; margin-bottom: 5px;">Active Target</div>
                     <div id="activeTarget" style="font-size: 1.5em; font-weight: bold; color: #34d399;">-.-V</div>
@@ -2308,7 +2308,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                 <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
                     <button onclick="sendCommand('start')">▶ Start Balancing</button>
                     <button class="stop" onclick="sendCommand('stop')">⏹ Stop / Gateway</button>
-                <button class="auto" onclick="sendCommand('auto')">🔄 Auto Mode</button>
+                    <button class="auto" onclick="sendCommand('auto')">🔄 Auto Mode</button>
               </div>
               <div class="soc-panel">
                 <div style="font-size: 0.9em; opacity: 0.8; margin-bottom: 5px;">SOC</div>
