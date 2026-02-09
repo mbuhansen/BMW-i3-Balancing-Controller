@@ -1702,13 +1702,13 @@ void performBroadcast()
       else
         idleReason = "Discharge";
     }
-    else if (doc["difference"].is<float>() && doc["difference"].as<float>() < balanceHysteresisMv)
+    else if (doc["difference"].is<float>() && doc["difference"].as<float>() < balanceThresholdMv)
     {
       idleReason = "Balancing not needed";
     }
     else
     {
-      idleReason = "Waiting to balance";
+      idleReason = "SOC too low";
     }
   }
   doc["idleReason"] = idleReason;
