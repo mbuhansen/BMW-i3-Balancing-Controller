@@ -200,6 +200,7 @@ The correct power-up sequence is critical to avoid slave module errors:
    - Error state clears and system becomes operational
 
 **If you encounter slave module errors:**
+- These errors occur if the battery is reset with battery balancer
 - Temporarily connect **both CAN bus lines** to MCP2515 CAN A
 - Wait for errors to clear ( this can few min up to maybe a hour)
 - Then move BMS CAN bus back to TWAI CAN B

@@ -2655,7 +2655,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                     if (module.error & 0x400) errors.push("Sleep Mode");
                     if (module.error & 0x800) errors.push("Thermal Shutdown");
                     if (module.error & 0x1000) errors.push("Test Alert");
-                    if (module.error & 0x2000) errors.push("OTP EPROM/Media Error");
+                    if (module.error & 0x2000) errors.push("EEPROM Error, move CAN B wire to CAN A wire and restart battery");
                     if (module.error & 0x4000) errors.push("Group3 Regs Invalid");
                     if (module.error & 0x8000) errors.push("Address Not Reg");
                     
