@@ -7,6 +7,7 @@
 #include <Update.h>
 #include <Preferences.h>
 #include <PubSubClient.h>
+#include <esp_now.h>
 
 #include "driver/twai.h"
 #include "can_dual_setup.h" // MCP2515 dual CAN
@@ -148,6 +149,17 @@ unsigned long mqttConnectedAt = 0;
 float mqttBatteryCurrent = 0.0f;
 float mqttBatterySoc = -1.0f;
 unsigned long mqttBatteryInfoAt = 0;
+float espnowBatteryCurrent = 0.0f;
+float espnowBatterySoc = -1.0f;
+unsigned long espnowBatteryInfoAt = 0;
+bool espNowInitialized = false;
+enum BatteryDataSource
+{
+  BATTERY_DATA_NONE,
+  BATTERY_DATA_MQTT,
+  BATTERY_DATA_ESPNOW
+};
+BatteryDataSource activeBatteryDataSource = BATTERY_DATA_NONE;
 unsigned long dischargeBelowTimer = 0;
 unsigned long chargeStopTimer = 0;
 unsigned long dischargeAboveTimer = 0;
@@ -458,6 +470,111 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
   }
 }
 
+static inline uint16_t readLeU16(const uint8_t *p)
+{
+  return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static inline int16_t readLeI16(const uint8_t *p)
+{
+  return (int16_t)readLeU16(p);
+}
+
+void updateBatteryDataSourceTelemetry()
+{
+  unsigned long now = millis();
+  bool espnowFresh = (espnowBatteryInfoAt > 0) && (now - espnowBatteryInfoAt <= DISCHARGE_MQTT_TIMEOUT_MS);
+  bool mqttFresh = (mqttBatteryInfoAt > 0) && (now - mqttBatteryInfoAt <= DISCHARGE_MQTT_TIMEOUT_MS);
+
+  BatteryDataSource newSource = BATTERY_DATA_NONE;
+  if (espnowFresh)
+    newSource = BATTERY_DATA_ESPNOW;
+  else if (mqttFresh)
+    newSource = BATTERY_DATA_MQTT;
+
+  if (newSource != activeBatteryDataSource)
+  {
+    activeBatteryDataSource = newSource;
+    if (newSource == BATTERY_DATA_ESPNOW)
+      telnetPrintln("Battery data source: ESP-NOW");
+    else if (newSource == BATTERY_DATA_MQTT)
+      telnetPrintln("Battery data source: MQTT");
+    else
+      telnetPrintln("Battery data source: NONE");
+  }
+}
+
+bool getHybridBatteryTelemetry(float &currentA, float &socPct, unsigned long &ageMs)
+{
+  updateBatteryDataSourceTelemetry();
+
+  unsigned long now = millis();
+  if (activeBatteryDataSource == BATTERY_DATA_ESPNOW && espnowBatteryInfoAt > 0)
+  {
+    currentA = espnowBatteryCurrent;
+    socPct = espnowBatterySoc;
+    ageMs = now - espnowBatteryInfoAt;
+    return true;
+  }
+
+  if (activeBatteryDataSource == BATTERY_DATA_MQTT && mqttBatteryInfoAt > 0)
+  {
+    currentA = mqttBatteryCurrent;
+    socPct = mqttBatterySoc;
+    ageMs = now - mqttBatteryInfoAt;
+    return true;
+  }
+
+  currentA = 0.0f;
+  socPct = -1.0f;
+  ageMs = DISCHARGE_MQTT_TIMEOUT_MS + 1;
+  return false;
+}
+
+void onEspNowDataRecv(const esp_now_recv_info *recvInfo, const uint8_t *incomingData, int len)
+{
+  (void)recvInfo;
+
+  // Battery Emulator status frame format:
+  // Byte 0-1: emulator_id (u16)
+  // Byte 2:   battery_id (1..n)
+  // Byte 3:   message_type
+  // Byte 4..83: first 80 bytes of DATALAYER_BATTERY_STATUS_TYPE
+  // We only parse 84-byte BAT_STATUS frames.
+  if (len != 84 || incomingData == nullptr)
+    return;
+
+  const bool usePrimary = (controllerSuffix.length() == 0 || controllerSuffix == "1");
+  uint8_t expectedBatteryId = usePrimary ? 1 : 2;
+  uint8_t batteryId = incomingData[2];
+  if (batteryId != expectedBatteryId)
+    return;
+
+  const uint8_t *statusBytes = incomingData + 4;
+  uint16_t reportedSocPptt = readLeU16(statusBytes + 50);
+  int16_t currentDa = readLeI16(statusBytes + 58);
+
+  espnowBatteryCurrent = ((float)currentDa) / 10.0f;
+  espnowBatterySoc = ((float)reportedSocPptt) / 100.0f;
+  espnowBatteryInfoAt = millis();
+}
+
+void initEspNowReceiver()
+{
+  if (espNowInitialized)
+    return;
+
+  if (esp_now_init() != ESP_OK)
+  {
+    telnetPrintln("ESP-NOW init failed");
+    return;
+  }
+
+  esp_now_register_recv_cb(onEspNowDataRecv);
+  espNowInitialized = true;
+  telnetPrintln("ESP-NOW receiver initialized");
+}
+
 void reconnectMQTT()
 {
   if (!mqttEnabled)
@@ -599,7 +716,11 @@ void updateMqttDischargeBlock()
   }
 
   unsigned long now = millis();
-  bool dataStale = (mqttBatteryInfoAt == 0) || (now - mqttBatteryInfoAt > DISCHARGE_MQTT_TIMEOUT_MS);
+  float batteryCurrentA = 0.0f;
+  unsigned long dataAgeMs = 0;
+  float ignoredSoc = -1.0f;
+  bool hasData = getHybridBatteryTelemetry(batteryCurrentA, ignoredSoc, dataAgeMs);
+  bool dataStale = !hasData || (dataAgeMs > DISCHARGE_MQTT_TIMEOUT_MS);
 
   if (dataStale)
   {
@@ -610,7 +731,7 @@ void updateMqttDischargeBlock()
   else
   {
     // Check for Discharge Block (Current < -1.0A)
-    if (mqttBatteryCurrent < DISCHARGE_STOP_THRESHOLD_A)
+    if (batteryCurrentA < DISCHARGE_STOP_THRESHOLD_A)
     {
       if (dischargeBelowTimer == 0)
         dischargeBelowTimer = now;
@@ -621,7 +742,7 @@ void updateMqttDischargeBlock()
     }
 
     // Check for Charge Block (Current > 2.0A)
-    if (mqttBatteryCurrent > CHARGE_STOP_THRESHOLD_A)
+    if (batteryCurrentA > CHARGE_STOP_THRESHOLD_A)
     {
       if (chargeStopTimer == 0)
         chargeStopTimer = now;
@@ -632,7 +753,7 @@ void updateMqttDischargeBlock()
     }
 
     // Check for Safe Zone to Resume (Current > -0.2A AND Current < 1.8A)
-    if (mqttBatteryCurrent > DISCHARGE_RESUME_THRESHOLD_A && mqttBatteryCurrent < CHARGE_RESUME_THRESHOLD_A)
+    if (batteryCurrentA > DISCHARGE_RESUME_THRESHOLD_A && batteryCurrentA < CHARGE_RESUME_THRESHOLD_A)
     {
       if (dischargeAboveTimer == 0)
         dischargeAboveTimer = now;
@@ -1728,6 +1849,15 @@ void performBroadcast()
   doc["mqttBatteryCurrent"] = mqttBatteryCurrent;
   doc["mqttBatterySoc"] = mqttBatterySoc;
   doc["mqttBatteryInfoAgeMs"] = (mqttBatteryInfoAt > 0) ? (millis() - mqttBatteryInfoAt) : 0;
+  float hybridCurrent = 0.0f;
+  float hybridSoc = -1.0f;
+  unsigned long hybridAge = 0;
+  if (getHybridBatteryTelemetry(hybridCurrent, hybridSoc, hybridAge))
+  {
+    doc["mqttBatteryCurrent"] = hybridCurrent;
+    doc["mqttBatterySoc"] = hybridSoc;
+    doc["mqttBatteryInfoAgeMs"] = hybridAge;
+  }
 
   JsonArray modulesArray = doc["modules"].to<JsonArray>();
 
@@ -3169,6 +3299,9 @@ void setup()
     telnetServer.begin();
     telnetServer.setNoDelay(true);
     Serial.println("✓ Telnet server started on port 23");
+
+    // Initialize ESP-NOW receiver for hybrid current/SOC telemetry
+    initEspNowReceiver();
   }
   else
   {
