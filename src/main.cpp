@@ -152,6 +152,7 @@ unsigned long mqttBatteryInfoAt = 0;
 float espnowBatteryCurrent = 0.0f;
 float espnowBatterySoc = -1.0f;
 unsigned long espnowBatteryInfoAt = 0;
+uint32_t espnowRxPackets = 0;
 bool espNowInitialized = false;
 enum BatteryDataSource
 {
@@ -557,6 +558,7 @@ void onEspNowDataRecv(const esp_now_recv_info *recvInfo, const uint8_t *incoming
   espnowBatteryCurrent = ((float)currentDa) / 10.0f;
   espnowBatterySoc = ((float)reportedSocPptt) / 100.0f;
   espnowBatteryInfoAt = millis();
+  espnowRxPackets = espnowRxPackets + 1;
 }
 
 void initEspNowReceiver()
@@ -3438,6 +3440,14 @@ void loop()
                  manualMode ? "MANUAL" : "AUTO",
                  lowestV, highestV,
                  (highestV - lowestV) * 1000.0f);
+
+    unsigned long espnowAgeMs = (espnowBatteryInfoAt > 0) ? (millis() - espnowBatteryInfoAt) : 0;
+    telnetPrintf("ESP-NOW: %s | RX=%lu | Age=%lums | I=%.1fA | SoC=%.2f%%\n",
+                 espNowInitialized ? "INIT" : "OFF",
+                 (unsigned long)espnowRxPackets,
+                 (unsigned long)espnowAgeMs,
+                 espnowBatteryCurrent,
+                 espnowBatterySoc);
   }
 
   // Minimal delay - maximize CAN throughput
