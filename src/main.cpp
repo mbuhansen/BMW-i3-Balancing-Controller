@@ -145,6 +145,7 @@ WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 unsigned long lastMqttPublish = 0;
 const unsigned long MQTT_PUBLISH_INTERVAL = 15000;
+unsigned long lastMqttReconnectAttempt = 0;
 unsigned long mqttConnectedAt = 0;
 float mqttBatteryCurrent = 0.0f;
 float mqttBatterySoc = -1.0f;
@@ -577,21 +578,24 @@ void initEspNowReceiver()
   telnetPrintln("ESP-NOW receiver initialized");
 }
 
-void reconnectMQTT()
+bool reconnectMQTT()
 {
   if (!mqttEnabled)
-    return;
+    return false;
 
   if (!mqttClient.connected())
   {
     bool connected = false;
 
-    // Construct unique Client ID based on suffix
+    // Construct unique Client ID based on suffix and ESP32 chip ID
     String clientId = "BMW-i3-BMS";
     if (controllerSuffix.length() > 0)
     {
       clientId += "-" + controllerSuffix;
     }
+    char uniqueChipId[13];
+    snprintf(uniqueChipId, sizeof(uniqueChipId), "%012llX", ESP.getEfuseMac());
+    clientId += "-" + String(uniqueChipId);
 
     // Check if MQTT credentials are provided
     if (String(MQTT_USER).length() > 0)
@@ -623,7 +627,11 @@ void reconnectMQTT()
       mqttClient.publish(statusTopic.c_str(), "online");
       sendHADiscovery();
     }
+
+    return connected;
   }
+
+  return true;
 }
 
 void processMQTT()
@@ -636,11 +644,14 @@ void processMQTT()
 
   if (!mqttClient.connected())
   {
-    static unsigned long lastReconnectAttempt = 0;
-    if (millis() - lastReconnectAttempt > 5000)
+    unsigned long now = millis();
+    if (now - lastMqttReconnectAttempt > 5000)
     {
-      lastReconnectAttempt = millis();
-      reconnectMQTT();
+      lastMqttReconnectAttempt = now;
+      if (reconnectMQTT())
+      {
+        lastMqttReconnectAttempt = 0;
+      }
     }
   }
   else
@@ -3290,6 +3301,7 @@ void setup()
     // Configure MQTT Server
     mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
     mqttClient.setBufferSize(2048);
+    mqttClient.setKeepAlive(60);
 
     IPAddress IP = WiFi.localIP();
     Serial.print("IP address: ");
