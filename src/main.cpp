@@ -2526,7 +2526,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <div class="setting-item">
                         <div class="setting-label">Cell Voltage Offset</div>
                         <div class="setting-input-group">
-                            <input type="number" id="cellVoltageOffset" step="0.001" min="0.002" max="0.010" value="0.002">
+                            <input type="number" id="cellVoltageOffset" step="0.001" min="0.003" max="0.010" value="0.003">
                             <span>V</span>
                         </div>
                     </div>
@@ -2668,7 +2668,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                 document.getElementById('balanceHysteresis').value = data.balanceHysteresisMv.toFixed(0);
             }
             if (document.activeElement.id !== 'cellVoltageOffset' && data.cellVoltageOffset) {
-                document.getElementById('cellVoltageOffset').value = data.cellVoltageOffset.toFixed(4);
+                document.getElementById('cellVoltageOffset').value = data.cellVoltageOffset.toFixed(3);
             }
             if (data.controllerSuffix !== undefined) {
                 if (document.activeElement.id !== 'controllerSuffix') {
@@ -3079,7 +3079,10 @@ const char index_html[] PROGMEM = R"rawliteral(
             const minBalanceVoltage = parseFloat(document.getElementById('minBalanceVoltage').value);
             const balanceThreshold = parseFloat(document.getElementById('balanceThreshold').value);
             const balanceHysteresis = parseFloat(document.getElementById('balanceHysteresis').value);
-            const cellVoltageOffset = parseFloat(document.getElementById('cellVoltageOffset').value);
+            let cellVoltageOffset = parseFloat(document.getElementById('cellVoltageOffset').value);
+            if (isNaN(cellVoltageOffset) || cellVoltageOffset < 0.003) cellVoltageOffset = 0.003;
+            if (cellVoltageOffset > 0.010) cellVoltageOffset = 0.010;
+            document.getElementById('cellVoltageOffset').value = cellVoltageOffset.toFixed(3);
             const controllerSuffix = document.getElementById('controllerSuffix').value;
             const autoModeAtStartup = document.getElementById('autoModeAtStartup').checked;
             const mqttEnabled = document.getElementById('mqttEnabled').checked;
