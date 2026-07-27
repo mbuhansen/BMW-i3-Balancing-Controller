@@ -154,7 +154,10 @@ float espnowBatteryCurrent = 0.0f;
 float espnowBatterySoc = -1.0f;
 unsigned long espnowBatteryInfoAt = 0;
 uint32_t espnowRxPackets = 0;
+uint32_t espnowRxDroppedLen = 0;
+uint32_t espnowRxDroppedId = 0;
 bool espNowInitialized = false;
+unsigned long lastWifiReconnectAttempt = 0;
 enum BatteryDataSource
 {
   BATTERY_DATA_NONE,
@@ -544,13 +547,21 @@ void onEspNowDataRecv(const esp_now_recv_info *recvInfo, const uint8_t *incoming
   // Byte 4..83: first 80 bytes of DATALAYER_BATTERY_STATUS_TYPE
   // We only parse 84-byte BAT_STATUS frames.
   if (len != 84 || incomingData == nullptr)
+  {
+    espnowRxDroppedLen = espnowRxDroppedLen + 1;
+    telnetPrintf("ESP-NOW: dropped packet, unexpected len=%d (expected 84)\n", len);
     return;
+  }
 
   const bool usePrimary = (controllerSuffix.length() == 0 || controllerSuffix == "1");
   uint8_t expectedBatteryId = usePrimary ? 1 : 2;
   uint8_t batteryId = incomingData[2];
   if (batteryId != expectedBatteryId)
+  {
+    espnowRxDroppedId = espnowRxDroppedId + 1;
+    telnetPrintf("ESP-NOW: dropped packet, battery_id=%d (expected %d)\n", batteryId, expectedBatteryId);
     return;
+  }
 
   const uint8_t *statusBytes = incomingData + 4;
   uint16_t reportedSocPptt = readLeU16(statusBytes + 50);
@@ -3286,7 +3297,12 @@ void setup()
   // Connect to WiFi Router
   Serial.println("\nConnecting to WiFi...");
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false); // Disable modem-sleep so ESP-NOW broadcasts aren't missed while STA-connected
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  // ESP-NOW only needs WIFI_STA mode set, not an actual AP connection,
+  // so init it now instead of gating it on WiFi.begin() succeeding below.
+  initEspNowReceiver();
 
   Serial.print("Connecting");
   int attempts = 0;
@@ -3316,14 +3332,11 @@ void setup()
     telnetServer.begin();
     telnetServer.setNoDelay(true);
     Serial.println("✓ Telnet server started on port 23");
-
-    // Initialize ESP-NOW receiver for hybrid current/SOC telemetry
-    initEspNowReceiver();
   }
   else
   {
     Serial.println("\n✗ WiFi connection failed!");
-    Serial.println("Please check SSID and password in code");
+    Serial.println("Please check SSID and password in code (ESP-NOW receiver still runs independently)");
   }
 
   // OTA DISABLED - causes FreeRTOS mutex conflicts after running for a while
@@ -3389,6 +3402,18 @@ void loop()
 
   // Check for telnet clients
   checkTelnetClient();
+
+  // Reconnect WiFi if it drops (does not affect ESP-NOW, which runs independently of AP association)
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    unsigned long now = millis();
+    if (now - lastWifiReconnectAttempt > 10000)
+    {
+      lastWifiReconnectAttempt = now;
+      telnetPrintln("WiFi: disconnected, attempting reconnect");
+      WiFi.reconnect();
+    }
+  }
 
   // Process MQTT
   processMQTT();
@@ -3457,9 +3482,11 @@ void loop()
                  (highestV - lowestV) * 1000.0f);
 
     unsigned long espnowAgeMs = (espnowBatteryInfoAt > 0) ? (millis() - espnowBatteryInfoAt) : 0;
-    telnetPrintf("ESP-NOW: %s | RX=%lu | Age=%lums | I=%.1fA | SoC=%.2f%%\n",
+    telnetPrintf("ESP-NOW: %s | RX=%lu | DropLen=%lu | DropId=%lu | Age=%lums | I=%.1fA | SoC=%.2f%%\n",
                  espNowInitialized ? "INIT" : "OFF",
                  (unsigned long)espnowRxPackets,
+                 (unsigned long)espnowRxDroppedLen,
+                 (unsigned long)espnowRxDroppedId,
                  (unsigned long)espnowAgeMs,
                  espnowBatteryCurrent,
                  espnowBatterySoc);
