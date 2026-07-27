@@ -46,6 +46,7 @@ float balanceThresholdMv = 10.0f;      // Start balancing if cells differ by mor
 float balanceHysteresisMv = 5.0f;      // Stop balancing when within this (mV)
 float cellVoltageOffset = 0.004f;      // Voltage offset added to target (V) - typically 4mV
 String controllerSuffix = "";          // Suffix for controller name (e.g. "1", "2")
+String beInfoTopic = "BE/info";        // Setting: MQTT topic Battery Emulator publishes info to
 bool dutyCycleEnabled = true;          // Setting: Enable 15m Run / 5m Pause duty cycle (default ON)
 uint16_t dutyCycleOnMinutes = 9;       // Setting: Duty cycle ON time in minutes (4-9, default 9)
 uint16_t dutyCyclePauseMinutes = 2; // Setting: Duty cycle PAUSE time in minutes (1-10, default 2)
@@ -406,7 +407,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
     payloadStr += (char)payload[i];
   }
 
-  if (topicStr == "BE/info")
+  if (topicStr == beInfoTopic)
   {
     JsonDocument filter;
     const bool usePrimary = (controllerSuffix.length() == 0 || controllerSuffix == "1");
@@ -630,7 +631,7 @@ bool reconnectMQTT()
       mqttClient.subscribe((baseTopic + "/cmd/start").c_str());
       mqttClient.subscribe((baseTopic + "/cmd/stop").c_str());
       mqttClient.subscribe((baseTopic + "/cmd/auto").c_str());
-      mqttClient.subscribe("BE/info");
+      mqttClient.subscribe(beInfoTopic.c_str());
 
       mqttConnectedAt = millis();
 
@@ -1664,6 +1665,24 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
             Serial.printf("Controller suffix set to %s\n", controllerSuffix.c_str());
             changed = true;
           }
+          if (doc["beInfoTopic"].is<const char *>())
+          {
+            String newTopic = doc["beInfoTopic"].as<String>();
+            if (newTopic.length() == 0)
+              newTopic = "BE/info";
+            if (newTopic != beInfoTopic)
+            {
+              if (mqttClient.connected())
+              {
+                mqttClient.unsubscribe(beInfoTopic.c_str());
+                mqttClient.subscribe(newTopic.c_str());
+              }
+              beInfoTopic = newTopic;
+              preferences.putString("beTopic", beInfoTopic);
+              Serial.printf("Battery Emulator MQTT topic set to %s\n", beInfoTopic.c_str());
+              changed = true;
+            }
+          }
           if (doc["autoModeAtStartup"].is<bool>())
           {
             autoModeAtStartup = doc["autoModeAtStartup"];
@@ -1864,6 +1883,7 @@ void performBroadcast()
   doc["balanceHysteresisMv"] = balanceHysteresisMv;
   doc["cellVoltageOffset"] = cellVoltageOffset;
   doc["controllerSuffix"] = controllerSuffix;
+  doc["beInfoTopic"] = beInfoTopic;
   doc["autoModeAtStartup"] = autoModeAtStartup;
   doc["mqttEnabled"] = mqttEnabled;
   doc["mqttDischargeBlockEnabled"] = mqttDischargeBlockEnabled;
@@ -2548,6 +2568,15 @@ const char index_html[] PROGMEM = R"rawliteral(
                         </div>
                     </div>
                     <div class="setting-item">
+                        <div class="setting-label">Battery Emulator MQTT Topic</div>
+                        <div class="setting-input-group">
+                            <input type="text" id="beInfoTopic" placeholder="e.g. BE/info" maxlength="64">
+                        </div>
+                        <div style="font-size: 0.8em; opacity: 0.6; margin-top: 5px; font-style: italic;">
+                            * Topic Battery Emulator publishes its info JSON to
+                        </div>
+                    </div>
+                    <div class="setting-item">
                         <div class="setting-label">Auto Mode at Startup</div>
                         <div class="setting-input-group">
                             <label class="switch" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
@@ -2688,6 +2717,9 @@ const char index_html[] PROGMEM = R"rawliteral(
                 const suffix = data.controllerSuffix ? ' ' + data.controllerSuffix : '';
                 document.title = 'BMW i3 Balancing Controller' + suffix;
                 document.getElementById('titleSuffix').textContent = data.controllerSuffix;
+            }
+            if (data.beInfoTopic !== undefined && document.activeElement.id !== 'beInfoTopic') {
+                document.getElementById('beInfoTopic').value = data.beInfoTopic;
             }
             if (data.autoModeAtStartup !== undefined) {
                  document.getElementById('autoModeAtStartup').checked = data.autoModeAtStartup;
@@ -3095,6 +3127,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (cellVoltageOffset > 0.010) cellVoltageOffset = 0.010;
             document.getElementById('cellVoltageOffset').value = cellVoltageOffset.toFixed(3);
             const controllerSuffix = document.getElementById('controllerSuffix').value;
+            const beInfoTopic = document.getElementById('beInfoTopic').value;
             const autoModeAtStartup = document.getElementById('autoModeAtStartup').checked;
             const mqttEnabled = document.getElementById('mqttEnabled').checked;
             const mqttDischargeBlockEnabled = document.getElementById('mqttDischargeBlockEnabled').checked;
@@ -3110,6 +3143,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                     balanceHysteresis: balanceHysteresis,
                     cellVoltageOffset: cellVoltageOffset,
                     controllerSuffix: controllerSuffix,
+                    beInfoTopic: beInfoTopic,
                     autoModeAtStartup: autoModeAtStartup,
                     mqttEnabled: mqttEnabled,
                     mqttDischargeBlockEnabled: mqttDischargeBlockEnabled,
@@ -3226,6 +3260,7 @@ void setup()
   balanceHysteresisMv = preferences.getFloat("hysteresis", 5.0f);
   cellVoltageOffset = preferences.getFloat("cellOffset", 0.002f);
   controllerSuffix = preferences.getString("suffix", "");
+  beInfoTopic = preferences.getString("beTopic", "BE/info");
   autoModeAtStartup = preferences.getBool("autoStart", false);
   mqttEnabled = preferences.getBool("mqttEnabled", false);
   mqttDischargeBlockEnabled = preferences.getBool("mqttDischargeBlock", false);
@@ -3245,6 +3280,7 @@ void setup()
   Serial.printf("- Hysteresis: %.0fmV\n", balanceHysteresisMv);
   Serial.printf("- Cell Voltage Offset: %.4fV (%.1fmV)\n", cellVoltageOffset, cellVoltageOffset * 1000.0f);
   Serial.printf("- Suffix: '%s'\n", controllerSuffix.c_str());
+  Serial.printf("- Battery Emulator MQTT topic: '%s'\n", beInfoTopic.c_str());
   Serial.printf("- Auto Start: %s\n", autoModeAtStartup ? "YES" : "NO");
   Serial.printf("- MQTT Enabled: %s\n", mqttEnabled ? "YES" : "NO");
   Serial.printf("- MQTT Discharge Block: %s\n", mqttDischargeBlockEnabled ? "YES" : "NO");
