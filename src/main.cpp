@@ -545,12 +545,23 @@ void onEspNowDataRecv(const esp_now_recv_info *recvInfo, const uint8_t *incoming
   // Byte 0-1: emulator_id (u16)
   // Byte 2:   battery_id (1..n)
   // Byte 3:   message_type
-  // Byte 4..83: first 80 bytes of DATALAYER_BATTERY_STATUS_TYPE
-  // We only parse 84-byte BAT_STATUS frames.
-  if (len != 84 || incomingData == nullptr)
+  // Byte 4..79: DATALAYER_BATTERY_STATUS_TYPE payload.
+  // Note: BATTERY_STATUS_TYPE is commented as 80 bytes on the sender side, but its
+  // trailing enum members (real_bms_status/led_mode/balancing_status) have no fixed
+  // underlying type, so the compiler pads it to 76 bytes in practice -> 80-byte frames
+  // on the wire, not 84. The field offsets below (50, 58) are unaffected since they
+  // fall before the padded tail.
+  // We only parse 80-byte BAT_STATUS frames. Battery Emulator also broadcasts
+  // BAT_INFO/BAT_BALANCE/BAT_CELL_STATUS frames (other lengths) every cycle;
+  // those are expected and silently ignored here (counted, but not logged) so
+  // they don't spam the telnet log.
+  if (incomingData == nullptr)
+  {
+    return;
+  }
+  if (len != 80)
   {
     espnowRxDroppedLen = espnowRxDroppedLen + 1;
-    telnetPrintf("ESP-NOW: dropped packet, unexpected len=%d (expected 84)\n", len);
     return;
   }
 
@@ -566,7 +577,9 @@ void onEspNowDataRecv(const esp_now_recv_info *recvInfo, const uint8_t *incoming
 
   const uint8_t *statusBytes = incomingData + 4;
   uint16_t reportedSocPptt = readLeU16(statusBytes + 50);
-  int16_t currentDa = readLeI16(statusBytes + 58);
+  // Empirically confirmed against Battery Emulator's live current (1.1-1.2A) via
+  // raw byte dump: +58 is actually a temperature field, current_dA is at +60.
+  int16_t currentDa = readLeI16(statusBytes + 60);
 
   espnowBatteryCurrent = ((float)currentDa) / 10.0f;
   espnowBatterySoc = ((float)reportedSocPptt) / 100.0f;
@@ -2642,9 +2655,13 @@ const char index_html[] PROGMEM = R"rawliteral(
         function handleMqttChange() {
              const mqttEnabled = document.getElementById('mqttEnabled').checked;
              const blockBtn = document.getElementById('mqttDischargeBlockEnabled');
-             
+
+             // Note: only grey the control out here, never mutate blockBtn.checked.
+             // This handler also runs on every state sync from the device (right
+             // before the real persisted mqttDischargeBlockEnabled value is applied),
+             // so forcing it to false here used to get picked up by the next
+             // "Save Settings" click and permanently overwrite the saved preference.
              if (!mqttEnabled) {
-                 blockBtn.checked = false;
                  blockBtn.disabled = true;
                  blockBtn.parentElement.style.opacity = '0.5';
                  blockBtn.parentElement.style.pointerEvents = 'none';
