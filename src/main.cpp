@@ -40,6 +40,16 @@
 #define CELLS_PER_MODULE 12
 #define CAN_COMMAND_INTERVAL_MS 20 // Send commands every 20ms (match BMS rate)
 
+// Cell 96 (sequential numbering, module 8 / cell 12) is excluded from all pack-wide
+// lowest/highest/diff calculations and from bar-card highlighting - its own sensor is unreliable.
+#define EXCLUDED_CELL_MODULE_INDEX 7 // Module 8 (0-indexed)
+#define EXCLUDED_CELL_INDEX 11       // Cell 12 within module (0-indexed)
+
+inline bool isExcludedFromDiffCalc(int moduleIndex, int cellIndex)
+{
+  return moduleIndex == EXCLUDED_CELL_MODULE_INDEX && cellIndex == EXCLUDED_CELL_INDEX;
+}
+
 // Balancing configuration (runtime adjustable)
 float minBalanceVoltage = 3.9f;       // Minimum voltage to start balancing (V)
 float balanceThresholdMv = 10.0f;      // Start balancing if cells differ by more than this (mV)
@@ -1427,6 +1437,8 @@ float getLowestCellVoltage()
       continue;
     for (int c = 0; c < CELLS_PER_MODULE; c++)
     {
+      if (isExcludedFromDiffCalc(m, c))
+        continue;
       if (modules[m].cellVoltages[c] > 0.5f && modules[m].cellVoltages[c] < lowest)
       {
         lowest = modules[m].cellVoltages[c];
@@ -1458,6 +1470,8 @@ float getHighestCellVoltage()
       continue;
     for (int c = 0; c < CELLS_PER_MODULE; c++)
     {
+      if (isExcludedFromDiffCalc(m, c))
+        continue;
       if (modules[m].cellVoltages[c] > highest)
       {
         highest = modules[m].cellVoltages[c];
@@ -1790,6 +1804,8 @@ void performBroadcast()
 
     for (int c = 0; c < CELLS_PER_MODULE; c++)
     {
+      if (isExcludedFromDiffCalc(m, c))
+        continue;
       if (modules[m].cellVoltages[c] > 0.5f && modules[m].cellVoltages[c] < lowestVoltage)
       {
         lowestVoltage = modules[m].cellVoltages[c];
@@ -3003,8 +3019,11 @@ const char index_html[] PROGMEM = R"rawliteral(
             const maxVoltage = Math.max(...allVoltages);
             const voltageRange = maxVoltage - minVoltage;
             
-            // For finding lowest/highest cell, use all cells
-            const cellsForStats = allCells;
+            // For finding lowest/highest cell, exclude cell 96 (module 8, cell 12) -
+            // its own sensor is unreliable so it must never be marked lowest/highest
+            const EXCLUDED_MODULE_ID = 8;
+            const EXCLUDED_CELL_INDEX = 12;
+            const cellsForStats = allCells.filter(c => !(c.moduleId === EXCLUDED_MODULE_ID && c.cellIndex === EXCLUDED_CELL_INDEX));
 
             // Dynamic window that adapts to actual voltage spread (up to 120mV+)
             // Add fixed padding (10mV) above and below to ensure bars never overflow
